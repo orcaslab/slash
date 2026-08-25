@@ -26,7 +26,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
 #include <condition_variable>
+#include <chrono>
+#include <cstdlib>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -606,12 +610,35 @@ void zmq_ctx_setup_and_run() {
     }
 }
 
+// Waveform capture traces every signal in the design to test.wdb. On a full
+// shell + kernel design that costs several MB/s of disk and dominates the run
+// time, so it is off unless explicitly asked for. Set VRT_SIM_WAVEFORM to 1,
+// on, yes or true to enable it; VRT_SIM_WDB overrides the output file name.
+static bool waveform_enabled() {
+    const char* v = std::getenv("VRT_SIM_WAVEFORM");
+    if (v == nullptr || v[0] == '\0') {
+        return false;
+    }
+    std::string s(v);
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return s == "1" || s == "on" || s == "yes" || s == "true";
+}
+
 int main() {
     std::string simengine_libname = "libxv_simulator_kernel.so";
     std::string design_libname = "xsim.dir/top_wrapper_behav/xsimk.so";
     SIM_EXEC_LOG(std::cout << "Sim Engine DLL: " << simengine_libname << std::endl);
     SIM_EXEC_LOG(std::cout << "Design DLL: " << design_libname << std::endl);
-    XSI_DUT dut(design_libname, simengine_libname, "rst", true, "clk", 4, "test.wdb", true);
+
+    const bool trace = waveform_enabled();
+    const char* wdb_env = std::getenv("VRT_SIM_WDB");
+    const std::string wdb_name =
+        (wdb_env != nullptr && wdb_env[0] != '\0') ? wdb_env : "test.wdb";
+    std::cout << "Waveform capture: " << (trace ? "enabled" : "disabled")
+              << " (set VRT_SIM_WAVEFORM=1 to enable)" << std::endl;
+    XSI_DUT dut(design_libname, simengine_libname, "rst", true, "clk", 4,
+                wdb_name, trace);
 
     SIM_EXEC_LOG(std::cout << "DUT initialized");
     SIM_EXEC_LOG(std::cout << "Initial cycle count: " << dut.get_cycle_count() << std::endl);
@@ -621,12 +648,41 @@ int main() {
 
     std::thread worker(zmq_ctx_setup_and_run);
 
+    // Progress heartbeat. Once the design is started the clock free-runs here,
+    // so a long-running kernel looks identical to a deadlock from the outside:
+    // no output, 100% CPU, forever. Printing the cycle count and the rate makes
+    // the difference observable, and the rate is what says whether waiting
+    // longer is worth it. Interval in seconds via VRT_SIM_HEARTBEAT; 0 or unset
+    // disables it, so the default is unchanged.
+    unsigned heartbeat_s = 0;
+    if (const char* hb = std::getenv("VRT_SIM_HEARTBEAT")) {
+        heartbeat_s = static_cast<unsigned>(std::strtoul(hb, nullptr, 10));
+    }
+    auto hb_last = std::chrono::steady_clock::now();
+    uint64_t hb_last_cycles = dut.get_cycle_count();
+
     while (!stop) {
         control_read_fsm(&dut, axiReadAddr, axiReadVal);
         control_write_fsm(&dut, axiWriteAddr, axiWriteData);
         mem_read_fsm(&dut, memReadAddr, memReadLen, memReadVal);
         mem_write_fsm(&dut, memWriteAddr, memWriteLen, memWriteData);
         dut.run_ncycles((start) ? 1 : 0);
+
+        if (heartbeat_s != 0) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                                  now - hb_last).count();
+            if (secs >= static_cast<long>(heartbeat_s)) {
+                const uint64_t cyc = dut.get_cycle_count();
+                std::cout << "[vpp_sim] cycles=" << cyc
+                          << " (+" << (cyc - hb_last_cycles)
+                          << " in " << secs << "s, "
+                          << ((cyc - hb_last_cycles) / (secs ? secs : 1))
+                          << " cyc/s)" << std::endl;
+                hb_last = now;
+                hb_last_cycles = cyc;
+            }
+        }
     }
     worker.join();
 

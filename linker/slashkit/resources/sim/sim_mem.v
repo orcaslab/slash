@@ -23,7 +23,7 @@
 module sim_mem
 #(
     parameter MEM_WIDTH = 64,
-    parameter MEM_DEPTH_LOG = 26,
+    parameter MEM_DEPTH_LOG = 34,
     parameter READ_LATENCY = 50
 )(
 
@@ -60,46 +60,20 @@ module sim_mem
     output [MEM_WIDTH-1:0] dout_b
 );
 
-
-reg [MEM_WIDTH-1:0] mem[2**MEM_DEPTH_LOG-1:0];
-
-
-genvar byte_idx;
-generate for(byte_idx=0; byte_idx<MEM_WIDTH/8; byte_idx=byte_idx+1) begin: byte_write
-    always @(posedge clk_a)
-        if(en_a)
-            if(we_a[byte_idx])
-                mem[addr_a][8*(byte_idx+1)-1:8*byte_idx] <= din_a[8*(byte_idx+1)-1:8*byte_idx];
-    always @(posedge clk_b)
-        if(en_b)
-            if(we_b[byte_idx])
-                mem[addr_b][8*(byte_idx+1)-1:8*byte_idx] <= din_b[8*(byte_idx+1)-1:8*byte_idx];
-end
-endgenerate
-
-reg [MEM_WIDTH-1:0] delayline_a[READ_LATENCY-1:0];
-reg [MEM_WIDTH-1:0] delayline_b[READ_LATENCY-1:0];
-
-always @(posedge clk_a)
-    if(rst_a)     delayline_a[0] <= 0; 
-    else if(en_a) delayline_a[0] <= mem[addr_a];
-
-always @(posedge clk_b)
-    if(rst_b)     delayline_b[0] <= 0; 
-    else if(en_b) delayline_b[0] <= mem[addr_b];
-
-genvar i;
-generate for(i=1; i<READ_LATENCY; i=i+1) begin: read_delay
-    always @(posedge clk_a)
-        if(rst_a) delayline_a[i] <= 0; 
-        else      delayline_a[i] <= delayline_a[i-1];
-    always @(posedge clk_b)
-        if(rst_b) delayline_b[i] <= 0; 
-        else      delayline_b[i] <= delayline_b[i-1];
-end
-endgenerate
-
-assign dout_a = delayline_a[READ_LATENCY-1];
-assign dout_b = delayline_b[READ_LATENCY-1];
+// Verilog-2001 wrapper. Vivado refuses a SystemVerilog file as the top of a BD
+// module reference ("[filemgmt 56-195] ... not allowed as the top file in the
+// reference"), but sub-modules may be SystemVerilog -- and the sparse backing
+// store needs an associative array. So the BD sees this wrapper and the storage
+// lives in sim_mem_core.sv.
+sim_mem_core #(
+    .MEM_WIDTH     (MEM_WIDTH),
+    .MEM_DEPTH_LOG (MEM_DEPTH_LOG),
+    .READ_LATENCY  (READ_LATENCY)
+) u_core (
+    .clk_a (clk_a), .rst_a (rst_a), .en_a (en_a), .addr_a (addr_a),
+    .we_a  (we_a),  .din_a (din_a), .dout_a (dout_a),
+    .clk_b (clk_b), .rst_b (rst_b), .en_b (en_b), .addr_b (addr_b),
+    .we_b  (we_b),  .din_b (din_b), .dout_b (dout_b)
+);
 
 endmodule

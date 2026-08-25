@@ -359,6 +359,15 @@ def generate_sim_tcl(config: LinkerConfiguration) -> None:
     sim_mem_dst = config.build_dir / "sim_mem.v"
     sim_mem_dst.write_text(sim_mem_src)
 
+    # sim_mem is a thin Verilog wrapper; the sparse storage lives in a
+    # SystemVerilog sub-module, because Vivado will not accept a SystemVerilog
+    # file as the top of a BD module reference.
+    sim_mem_core_src = resources.read_text(
+        "slashkit.resources.sim", "sim_mem_core.sv", encoding="utf-8"
+    )
+    sim_mem_core_dst = config.build_dir / "sim_mem_core.sv"
+    sim_mem_core_dst.write_text(sim_mem_core_src)
+
     render_template(
         template="sim_prj.tcl",
         out_path=sim_out,
@@ -367,6 +376,7 @@ def generate_sim_tcl(config: LinkerConfiguration) -> None:
             "sim_prj_dir": str(config.build_dir / "sim_prj"),
             "ip_repo_path": str(config.build_dir / "iprepo"),
             "sim_mem_path": str(sim_mem_dst),
+            "sim_mem_core_path": str(sim_mem_core_dst),
             "bd_name": "top",
             "part": "xcv80-lsva4737-2MHP-e-S",
             "kernels": kernels_ctx,

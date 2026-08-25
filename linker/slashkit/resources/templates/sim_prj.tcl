@@ -22,12 +22,14 @@ set sim_root "{{ sim_root }}"
 set sim_prj_dir "{{ sim_prj_dir }}"
 set ip_repo_path "{{ ip_repo_path }}"
 set sim_mem_path "{{ sim_mem_path }}"
+set sim_mem_core_path "{{ sim_mem_core_path }}"
 set bd_name "{{ bd_name }}"
 set part "{{ part }}"
 
 create_project sim_prj "${sim_prj_dir}" -part ${part} -force
 
 add_files -norecurse ${sim_mem_path}
+add_files -norecurse ${sim_mem_core_path}
 update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1
 
@@ -174,8 +176,14 @@ connect_bd_intf_net -intf_net {{ s.net_name }} [get_bd_intf_pins {{ s.src_pin }}
 assign_bd_address -offset {{ a.offset_hex }} -range {{ a.range_hex }} [get_bd_addr_segs {{ a.inst }}/{{ a.busif }}/{{ a.segment }}] -force
 {% endfor %}
 
-assign_bd_address -offset 0x4000000000 -range 128M [get_bd_addr_segs /bram_ctrl/S_AXI/Mem0] -force
-assign_bd_address -offset 0x60000000000 -range 128M [get_bd_addr_segs /bram_ctrl_ddr/S_AXI/Mem0] -force
+# Map the full aperture a kernel can address, not a token window. Vortex places
+# its stack at the top of its memory map (4 GB at XLEN=32, 8 GB at XLEN=64) and
+# reaches it from the first instruction, so a window that only covers the low
+# few hundred MB leaves every stack access undecoded: no AXI response, and the
+# master stalls forever. sim_mem's backing store is sparse, so the range costs
+# nothing for addresses the test never touches.
+assign_bd_address -offset 0x4000000000 -range 8G [get_bd_addr_segs /bram_ctrl/S_AXI/Mem0] -force
+assign_bd_address -offset 0x60000000000 -range 8G [get_bd_addr_segs /bram_ctrl_ddr/S_AXI/Mem0] -force
 save_bd_design
 validate_bd_design
 add_files -norecurse [make_wrapper -files [get_files "${bd_name}.bd"] -top]
