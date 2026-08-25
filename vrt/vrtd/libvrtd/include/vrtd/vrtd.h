@@ -207,6 +207,25 @@ enum vrtd_ret vrtd_get_bar_fd(
 );
 
 /**
+ * @brief Allocate host memory a kernel's AXI master can reach.
+ *
+ * The device addresses the result by bus address over the QDMA slave bridge,
+ * so both views are returned: @p fd_out to mmap, and @p dma_addr_out to
+ * program into the design. The allocation is DMA-coherent -- no explicit sync
+ * is needed on either side.
+ *
+ * @param fd            Connected vrtd socket.
+ * @param dev           Device index.
+ * @param length        Requested size in bytes; rounded up to a page.
+ * @param fd_out        Receives the mmap-able fd; the caller owns it.
+ * @param len_out       Receives the granted length.
+ * @param dma_addr_out  Receives the bus address the device masters to.
+ */
+enum vrtd_ret vrtd_host_buffer_alloc(int fd, uint32_t dev, uint64_t length,
+                                     int *fd_out, uint64_t *len_out,
+                                     uint64_t *dma_addr_out);
+
+/**
  * @brief Open a BAR and map it into the process address space.
  *
  * Convenience helper that requests a BAR FD and performs @c mmap() into

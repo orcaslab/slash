@@ -44,6 +44,18 @@
 struct dma_buf *slash_bar_dmabuf_create(struct pci_dev *pdev, int bar_number);
 
 /**
+ * slash_hostbuf_create() - Allocate coherent host memory a kernel can master to.
+ * @pdev:     Owning PCI device.
+ * @length:   Requested size in bytes; rounded up to a page.
+ * @dma_addr: Receives the bus address the device addresses.
+ * @out_len:  Receives the granted (rounded) length.
+ *
+ * Return: an owning dma_buf on success, ERR_PTR otherwise.
+ */
+struct dma_buf *slash_hostbuf_create(struct pci_dev *pdev, u64 length,
+                                     dma_addr_t *dma_addr, size_t *out_len);
+
+/**
  * slash_bar_dmabuf_destroy() - Release a BAR dma-buf.
  * @dmabuf: dma-buf returned by slash_bar_dmabuf_create().
  *

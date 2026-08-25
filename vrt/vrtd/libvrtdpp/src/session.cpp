@@ -45,6 +45,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <iostream>
 #include <utility>
@@ -282,6 +283,34 @@ BarFile Session::openBarFile(const Bar& bar) const {
     }
 
     return BarFile(barFile);
+}
+
+Session::HostBuffer Session::allocHostBuffer(const Device& device, uint64_t length) const {
+    if (isClosed()) {
+        throw Error(VRTD_RET_BAD_LIB_CALL);
+    }
+    std::lock_guard<std::mutex> lk(*m);
+
+    HostBuffer buffer;
+    uint64_t len = 0;
+    uint64_t dma = 0;
+
+    auto ret = vrtd_host_buffer_alloc(fd, device.getNum(), length, &buffer.fd, &len, &dma);
+    if (ret != VRTD_RET_OK) {
+        throw Error(ret);
+    }
+
+    buffer.length     = static_cast<size_t>(len);
+    buffer.dmaAddress = dma;
+    buffer.address    = mmap(nullptr, buffer.length, PROT_READ | PROT_WRITE,
+                             MAP_SHARED, buffer.fd, 0);
+    if (buffer.address == MAP_FAILED) {
+        buffer.address = nullptr;
+        ::close(buffer.fd);
+        throw Error(VRTD_RET_INTERNAL_ERROR);
+    }
+
+    return buffer;
 }
 
 slash_qdma_info Session::getQdmaInfo(const Device& device) const {

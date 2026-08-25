@@ -432,6 +432,33 @@ enum vrtd_ret vrtd_get_bar_fd(int fd, uint32_t dev, uint8_t bar, int *fd_out, ui
     return VRTD_RET_OK;
 }
 
+enum vrtd_ret vrtd_host_buffer_alloc(int fd, uint32_t dev, uint64_t length,
+                                     int *fd_out, uint64_t *len_out,
+                                     uint64_t *dma_addr_out)
+{
+    if (fd_out == NULL || len_out == NULL || dma_addr_out == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    struct vrtd_req_host_buffer_alloc req = {
+        .dev_number = dev,
+        .length = length,
+    };
+    struct vrtd_resp_host_buffer_alloc resp = {0};
+    int ret = vrtd_raw_request(fd, VRTD_REQ_HOST_BUFFER_ALLOC,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               fd_out, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    *len_out      = resp.len;
+    *dma_addr_out = resp.dma_address;
+
+    return VRTD_RET_OK;
+}
+
 enum vrtd_ret vrtd_qdma_get_info(int fd, uint32_t dev, struct slash_qdma_info *info_out)
 {
     if (info_out == NULL) {

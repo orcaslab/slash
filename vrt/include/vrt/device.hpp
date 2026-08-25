@@ -194,6 +194,14 @@ class Device {
     Platform getPlatform();
 
     /**
+     * @brief Allocate host memory a kernel's AXI master can reach.
+     *
+     * Hardware only: the device addresses the result by bus address over the
+     * QDMA slave bridge. Coherent, so no explicit sync is required.
+     */
+    vrtd::Session::HostBuffer allocHostBuffer(uint64_t length);
+
+    /**
      * @brief Gets the ZMQ server.
      */
     std::shared_ptr<ZmqServer> getZmqServer();
@@ -326,6 +334,17 @@ class Device {
      * @brief Gets the platform.
      */
     Platform getPlatform() { return handle->getPlatform(); }
+
+    /**
+     * @brief Allocate host memory a kernel's AXI master can reach.
+     *
+     * The returned mapping and @c dmaAddress refer to the same coherent bytes:
+     * write through the mapping, hand @c dmaAddress to the design. Closing
+     * @c fd releases the allocation.
+     */
+    vrtd::Session::HostBuffer allocHostBuffer(uint64_t length) {
+        return handle->allocHostBuffer(length);
+    }
 
     /**
      * @brief Return the internal device handle.

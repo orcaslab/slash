@@ -199,6 +199,15 @@ static uint16_t client_handle_request_get_bar_fd(
     int *out_fd,
     bool *have_out_fd
 );
+static uint16_t client_handle_request_host_buffer_alloc(
+    struct client *client,
+    const struct vrtd_req_host_buffer_alloc *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_host_buffer_alloc *resp_body,
+    uint16_t *resp_size,
+    int *out_fd,
+    bool *have_out_fd
+);
 static uint16_t client_handle_request_qdma_get_info(
     struct client *client,
     const struct vrtd_req_qdma_get_info *req_body,
@@ -333,6 +342,7 @@ static const char *vrtd_opcode_to_string(uint16_t opcode)
     case VRTD_REQ_GET_DEVICE_BY_BDF: return "GET_DEVICE_BY_BDF";
     case VRTD_REQ_GET_BAR_INFO:      return "GET_BAR_INFO";
     case VRTD_REQ_GET_BAR_FD:        return "GET_BAR_FD";
+    case VRTD_REQ_HOST_BUFFER_ALLOC: return "HOST_BUFFER_ALLOC";
     case VRTD_REQ_QDMA_GET_INFO:     return "QDMA_GET_INFO";
     case VRTD_REQ_QDMA_QPAIR_ADD:   return "QDMA_QPAIR_ADD";
     case VRTD_REQ_QDMA_QPAIR_OP:    return "QDMA_QPAIR_OP";
@@ -1189,6 +1199,18 @@ static int client_handle_request(struct client *client)
                 CLIENT_IN_BODY(*client, vrtd_req_get_bar_fd),
                 req_header->size,
                 CLIENT_OUT_BODY(*client, vrtd_resp_get_bar_fd),
+                &size,
+                &client->out_fds[0],
+                &client->have_out_fd
+            );
+        break;
+    case VRTD_REQ_HOST_BUFFER_ALLOC:
+        resp_header->ret =
+            client_handle_request_host_buffer_alloc(
+                client,
+                CLIENT_IN_BODY(*client, vrtd_req_host_buffer_alloc),
+                req_header->size,
+                CLIENT_OUT_BODY(*client, vrtd_resp_host_buffer_alloc),
                 &size,
                 &client->out_fds[0],
                 &client->have_out_fd
@@ -3630,6 +3652,103 @@ static uint16_t client_handle_request_get_bar_fd(
 
     LOG(LOG_DEBUG, "get_bar_fd: dev=%u bar=%u uid=%u conn_id=%llu",
         (unsigned int)req_body->dev_number, (unsigned int)req_body->bar_number,
+        (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+    return VRTD_RET_OK;
+}
+
+/**
+ * Handles VRTD_REQ_HOST_BUFFER_ALLOC -- returns host memory a kernel can master to.
+ *
+ * The device reaches host DRAM through the QDMA slave bridge, which addresses
+ * it by bus address rather than by CPU virtual address. The client needs both
+ * views: the fd to mmap and write through, and the bus address to program into
+ * the design. The allocation is DMA-coherent, so neither side needs an explicit
+ * sync -- that is what makes a host-resident command ring workable.
+ *
+ * The daemon owns the allocation; closing the client's fd releases it.
+ *
+ * Auth: auth_request_host_buffer_alloc.
+ * FD passing: outbound -- the buffer fd is sent via SCM_RIGHTS.
+ *
+ * Wire format:
+ *   Request body:  vrtd_req_host_buffer_alloc { uint32_t dev_number,
+ *                                               uint64_t length }
+ *   Response body: vrtd_resp_host_buffer_alloc { uint64_t len,
+ *                                                uint64_t dma_address }
+ *                  + SCM_RIGHTS fd
+ *
+ * @return VRTD_RET_OK on success, VRTD_RET_NOEXIST if the device is unknown.
+ */
+static uint16_t client_handle_request_host_buffer_alloc(
+    struct client *client,
+    const struct vrtd_req_host_buffer_alloc *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_host_buffer_alloc *resp_body,
+    uint16_t *resp_size,
+    int *out_fd,
+    bool *have_out_fd
+)
+{
+    int ret = auth_request_host_buffer_alloc(client, req_body);
+    if (ret == -1) {
+        return VRTD_RET_INTERNAL_ERROR;
+    } else if (ret == 0) {
+        return VRTD_RET_AUTH_ERROR;
+    }
+
+    *resp_size = 0;
+    *have_out_fd = false;
+
+    if (req_size < sizeof(*req_body)) {
+        LOG(LOG_WARNING, "host_buffer_alloc: malformed request");
+        return VRTD_RET_BAD_REQUEST;
+    }
+
+    if (req_body->dev_number >= client->state->devices.len) {
+        LOG(LOG_NOTICE, "host_buffer_alloc: device %u does not exist",
+            (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    if (req_body->length == 0) {
+        LOG(LOG_WARNING, "host_buffer_alloc: zero length");
+        return VRTD_RET_BAD_REQUEST;
+    }
+
+    struct slash_ctldev *ctl = client->state->devices.d[req_body->dev_number]->ctl;
+    if (ctl == NULL) {
+        LOG(LOG_NOTICE, "host_buffer_alloc: device %u has no control handle",
+            (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    struct slash_host_buffer *buffer = slash_host_buffer_alloc(ctl, req_body->length);
+    if (buffer == NULL) {
+        LOG(LOG_WARNING, "host_buffer_alloc: allocation of %llu bytes failed: %s",
+            (unsigned long long)req_body->length, strerror(errno));
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    resp_body->len         = (uint64_t)buffer->len;
+    resp_body->dma_address = buffer->dma_address;
+
+    /*
+     * Hand the fd to the client and drop the daemon's own mapping: the fd is
+     * now the sole owner, so the allocation is released when the client closes
+     * it, even if the client dies.
+     */
+    *out_fd = buffer->fd;
+    *have_out_fd = true;
+    if (buffer->map != NULL) {
+        munmap(buffer->map, buffer->len);
+    }
+    free(buffer);
+
+    *resp_size = sizeof(*resp_body);
+
+    LOG(LOG_DEBUG, "host_buffer_alloc: dev=%u len=%llu uid=%u conn_id=%llu",
+        (unsigned int)req_body->dev_number, (unsigned long long)resp_body->len,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
     return VRTD_RET_OK;

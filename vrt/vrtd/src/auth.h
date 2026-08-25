@@ -125,6 +125,21 @@ int auth_request_get_bar_fd(
 );
 
 /**
+ * @brief Authorize a HOST_BUFFER_ALLOC request.
+ *
+ * The allocation is mastered by the device over the slave bridge, so it is
+ * gated on the same data-plane permission as BAR access.
+ *
+ * @param client   The requesting client.
+ * @param req_body The parsed request body containing the device index.
+ * @return 1 if authorized, 0 if denied, <0 on internal error.
+ */
+int auth_request_host_buffer_alloc(
+    struct client *client,
+    const struct vrtd_req_host_buffer_alloc *req_body
+);
+
+/**
  * @brief Authorize a QDMA_GET_INFO request.
  *
  * Checks that the client's role permits querying QDMA subsystem

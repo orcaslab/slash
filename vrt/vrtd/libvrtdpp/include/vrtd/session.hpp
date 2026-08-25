@@ -213,6 +213,28 @@ public:
      * @return @c true if the session is open (not closed).
      */
     explicit operator bool() const noexcept;
+
+    /**
+     * @brief Host memory a kernel's AXI master can reach.
+     *
+     * @c address is the caller's mapping; @c dmaAddress is what the device
+     * masters to over the QDMA slave bridge. The allocation is DMA-coherent,
+     * so both views see the same bytes with no explicit sync.
+     */
+    struct HostBuffer {
+        int      fd = -1;            ///< Owning fd; closing it frees the allocation.
+        void    *address = nullptr;  ///< Caller-side mapping.
+        size_t   length = 0;         ///< Granted length in bytes.
+        uint64_t dmaAddress = 0;     ///< Bus address the device addresses.
+    };
+
+    /**
+     * @brief Allocate host memory addressable by a kernel's AXI master.
+     * @param device Device whose DMA mapping the allocation belongs to.
+     * @param length Requested size in bytes; rounded up to a page.
+     */
+    HostBuffer allocHostBuffer(const Device &device, uint64_t length) const;
+
 private:
     int fd;
     mutable std::unique_ptr<std::mutex> m;

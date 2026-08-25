@@ -64,6 +64,7 @@ SLASH_HAVE_VM_FLAGS_SET ?= n
 SLASH_HAVE_MODULE_IMPORT_NS_TOKEN ?= n
 SLASH_HAVE_URING_CMD ?= n
 SLASH_HAVE_URING_SQE_CMD ?= n
+SLASH_HAVE_TIMER_MODERN ?= n
 
 # Set GCOV=1 to instrument the module for kernel gcov coverage.
 # Not set by default — never enable this in production builds.
@@ -72,7 +73,7 @@ GCOV_PROFILE := y
 endif
 
 obj-m          := $(MODULE).o
-$(MODULE)-objs := $(MODULE)_main.o $(MODULE)_ctldev.o $(MODULE)_pcie.o $(MODULE)_dmabuf.o $(MODULE)_hotplug.o $(MODULE)_qdma.o
+$(MODULE)-objs := $(MODULE)_main.o $(MODULE)_ctldev.o $(MODULE)_pcie.o $(MODULE)_dmabuf.o $(MODULE)_hotplug.o $(MODULE)_qdma.o $(MODULE)_hostbuf.o
 ccflags-y += \
 	-I$(src)/libslash/include \
 	-I$(src)/libslash/include/slash/uapi \
@@ -108,6 +109,12 @@ endif
 # when SLASH_HAVE_URING_CMD is also set.
 ifeq ($(SLASH_HAVE_URING_SQE_CMD),y)
 ccflags-y += -DSLASH_HAVE_URING_SQE_CMD
+endif
+
+# libqdma still spells these del_timer()/from_timer(); force-include the shim
+# rather than patching the submodule.
+ifeq ($(SLASH_HAVE_TIMER_MODERN),y)
+ccflags-y += -include $(src)/kcompat/qdma_timer_compat.h
 endif
 
 # Force-include the compat header into every TU (including the pinned libqdma

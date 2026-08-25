@@ -47,6 +47,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include <linux/dma-buf.h>
@@ -100,6 +101,35 @@ struct slash_ctldev *slash_ctldev_open(const char *path);
  * @return 0 on success, -1 on failure.
  */
 int slash_ctldev_close(struct slash_ctldev *ctldev);
+
+/**
+ * @brief Host memory a kernel's AXI master can reach.
+ *
+ * @c map is the caller's view; @c dma_address is what the device masters to.
+ * The allocation is DMA-coherent, so both views see the same bytes without an
+ * explicit sync -- which is what lets a design keep a command ring here and
+ * have the device pull from it.
+ */
+struct slash_host_buffer {
+    int      fd;           /**< dma-buf fd backing the mapping. */
+    void    *map;          /**< Caller-side mapping, or NULL. */
+    size_t   len;          /**< Granted length in bytes. */
+    uint64_t dma_address;  /**< Bus address the device addresses. */
+};
+
+/**
+ * @brief Allocate host memory addressable by a kernel's AXI master.
+ * @param ctldev Control device handle.
+ * @param length Requested size in bytes; rounded up to a page.
+ * @return Owning handle, or NULL with errno set.
+ */
+struct slash_host_buffer *slash_host_buffer_alloc(struct slash_ctldev *ctldev, uint64_t length);
+
+/**
+ * @brief Release a host buffer; unmaps and closes the underlying fd.
+ * @return 0 on success, -1 with errno set.
+ */
+int slash_host_buffer_free(struct slash_host_buffer *buffer);
 
 
 /**

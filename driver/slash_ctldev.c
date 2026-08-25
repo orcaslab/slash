@@ -645,6 +645,57 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
         return ret;
     }
 
+    case SLASH_CTLDEV_IOCTL_ALLOC_HOST_BUF: {
+        struct slash_ioctl_host_buffer_request req = {0};
+        struct dma_buf *dmabuf;
+        dma_addr_t dma_addr = 0;
+        size_t granted = 0;
+        u32 user_size = 0;
+        size_t copy_size;
+        int ret;
+
+        if (copy_from_user(&user_size, (void __user *)arg, sizeof(user_size))) {
+            dev_err(&pdev->dev, "ctldev: ALLOC_HOST_BUF copy_from_user failed\n");
+            return -EFAULT;
+        }
+        if (user_size < sizeof(req)) {
+            dev_warn(&pdev->dev, "ctldev: ALLOC_HOST_BUF size too small (%u)\n", user_size);
+            return -EINVAL;
+        }
+        if (copy_from_user(&req, (void __user *)arg, sizeof(req))) {
+            dev_err(&pdev->dev, "ctldev: ALLOC_HOST_BUF copy_from_user failed\n");
+            return -EFAULT;
+        }
+
+        dmabuf = slash_hostbuf_create(pdev, req.length, &dma_addr, &granted);
+        if (IS_ERR(dmabuf)) {
+            return PTR_ERR(dmabuf);
+        }
+
+        ret = dma_buf_fd(dmabuf, O_CLOEXEC);
+        if (ret < 0) {
+            dev_err(&pdev->dev, "ctldev: ALLOC_HOST_BUF dma_buf_fd failed: %d\n", ret);
+            dma_buf_put(dmabuf);
+            return ret;
+        }
+
+        req.size          = sizeof(req);
+        req.fd            = ret;
+        req.dma_address   = (u64)dma_addr;
+        req.actual_length = (u64)granted;
+
+        copy_size = min_t(size_t, user_size, sizeof(req));
+        if (copy_to_user((void __user *)arg, &req, copy_size)) {
+            dev_err(&pdev->dev, "ctldev: ALLOC_HOST_BUF copy_to_user failed\n");
+            /* The fd owns the buffer now; closing it releases the allocation. */
+            return -EFAULT;
+        }
+
+        dev_dbg(&pdev->dev, "ctldev: ALLOC_HOST_BUF len=%zu dma=%pad -> fd %d\n",
+                granted, &dma_addr, ret);
+        return ret;
+    }
+
     case SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO: {
         struct slash_ioctl_device_info info;
         u32 user_size = 0;

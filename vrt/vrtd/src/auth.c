@@ -512,6 +512,22 @@ int auth_request_get_bar_fd(
     );
 }
 
+int auth_request_host_buffer_alloc(
+    struct client *client,
+    const struct vrtd_req_host_buffer_alloc *req_body
+)
+{
+    assert(client != NULL);
+    assert(req_body != NULL);
+
+    int ret = ensure_role(client);
+    PROPAGATE_ERROR(ret);
+
+    return auth_check_device_permission(
+        client, req_body->dev_number, AUTH_SUBSYSTEM_BAR, "host_buffer_alloc"
+    );
+}
+
 /**
  * @brief Authorize a qdma_get_info request (QDMA subsystem query).
  *

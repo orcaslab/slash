@@ -121,6 +121,9 @@ enum vrtd_opcode {
 
     /** Set vrtd's in-memory shell/JTAG state for a device. */
     VRTD_REQ_SET_SHELL_STATE,
+
+    /** Allocate host memory a kernel's AXI master can reach; returns an fd via SCM_RIGHTS. */
+    VRTD_REQ_HOST_BUFFER_ALLOC,
 };
 
 /**
@@ -240,6 +243,29 @@ struct vrtd_req_get_bar_fd {
  * The BAR file descriptor is sent out-of-band via SCM_RIGHTS in the same
  * message and is present only when @ref vrtd_resp_header::ret == VRTD_RET_OK.
  */
+/**
+ * @brief Request to VRTD_REQ_HOST_BUFFER_ALLOC.
+ *
+ * Kernels reach host DRAM through the QDMA slave bridge, which addresses it by
+ * bus address. The daemon owns the allocation so it outlives any single client
+ * mapping, matching how BAR and qpair fds are handled.
+ */
+struct vrtd_req_host_buffer_alloc {
+    uint32_t dev_number; ///< Device whose DMA mapping the allocation belongs to.
+    uint64_t length;     ///< Requested size in bytes; rounded up to a page.
+} __attribute__((packed));
+
+/**
+ * @brief Response to VRTD_REQ_HOST_BUFFER_ALLOC.
+ *
+ * The buffer file descriptor is sent out-of-band via SCM_RIGHTS in the same
+ * message and is present only when @ref vrtd_resp_header::ret == VRTD_RET_OK.
+ */
+struct vrtd_resp_host_buffer_alloc {
+    uint64_t len;         ///< Granted size after rounding; suitable for mmap.
+    uint64_t dma_address; ///< Bus address the device masters to.
+} __attribute__((packed));
+
 struct vrtd_resp_get_bar_fd {
     uint64_t len; ///< Size of the BAR address space; suitable for mmap.
 } __attribute__((packed));

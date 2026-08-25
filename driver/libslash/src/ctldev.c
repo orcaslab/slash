@@ -267,3 +267,67 @@ void slash_bar_info_free(struct slash_ioctl_bar_info *bar_info)
 {
     free(bar_info);
 }
+
+struct slash_host_buffer *slash_host_buffer_alloc(struct slash_ctldev *ctldev, uint64_t length)
+{
+    struct slash_ioctl_host_buffer_request req = {
+        .size = sizeof(req),
+
+        .length = length,
+    };
+
+    struct slash_host_buffer *buffer;
+
+    if (ctldev == NULL || length == 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    buffer = calloc(1, sizeof(*buffer));
+    if (buffer == NULL) {
+        return NULL;
+    }
+
+    /* The ioctl returns the dma-buf fd directly as its return value. */
+    buffer->fd = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_ALLOC_HOST_BUF, &req);
+    if (buffer->fd < 0) {
+        goto err_free_buffer;
+    }
+
+    buffer->len         = (size_t) req.actual_length;
+    buffer->dma_address = req.dma_address;
+
+    buffer->map = mmap(NULL, buffer->len, PROT_READ | PROT_WRITE, MAP_SHARED, buffer->fd, 0);
+    if (buffer->map == MAP_FAILED) {
+        buffer->map = NULL;
+        goto err_close_fd;
+    }
+
+    return buffer;
+
+err_close_fd:
+    close(buffer->fd);
+err_free_buffer:
+    free(buffer);
+    return NULL;
+}
+
+int slash_host_buffer_free(struct slash_host_buffer *buffer)
+{
+    int ret = 0;
+
+    if (buffer == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (buffer->map != NULL && munmap(buffer->map, buffer->len) != 0) {
+        ret = -1;
+    }
+    if (buffer->fd >= 0 && close(buffer->fd) != 0) {
+        ret = -1;
+    }
+
+    free(buffer);
+    return ret;
+}

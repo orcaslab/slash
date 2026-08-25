@@ -124,6 +124,32 @@ struct slash_ioctl_device_info {
     __u16 subsystem_device_id;        /**< [out] PCI subsystem device ID. */
 };
 
+/**
+ * @brief Allocate host memory that a kernel's AXI master can reach.
+ *
+ * Kernels reach host DRAM through the QDMA slave bridge, which addresses it
+ * by bus address rather than by CPU virtual address. The allocation is
+ * DMA-coherent, so no explicit sync is needed once the fd is mapped: this is
+ * what lets a design keep a command ring in host memory and have the device
+ * pull from it.
+ */
+struct slash_ioctl_host_buffer_request {
+    __u32 size;         /**< Struct size for ABI versioning. */
+    __u32 reserved;     /**< Alignment padding; must be zero. */
+
+    /* Userspace to kernel */
+    __u64 length;       /**< [in] Requested size in bytes; rounded up to a page. */
+
+    /* Kernel to userspace */
+    __s32 fd;           /**< [out] mmap-able fd for the region. */
+    __u32 pad;          /**< Alignment padding. */
+    __u64 dma_address;  /**< [out] Bus address the device masters to. */
+    __u64 actual_length;/**< [out] Granted size after rounding. */
+};
+
+/** Allocate DMA-coherent host memory addressable by a kernel's AXI master. */
+#define SLASH_CTLDEV_IOCTL_ALLOC_HOST_BUF _IOWR('v', 0x33, struct slash_ioctl_host_buffer_request)
+
 /** Query BAR properties.  Fills the kernel-to-userspace fields of slash_ioctl_bar_info. */
 #define SLASH_CTLDEV_IOCTL_GET_BAR_INFO _IOWR('v', 0x30, struct slash_ioctl_bar_info)
 

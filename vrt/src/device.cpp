@@ -429,6 +429,18 @@ void Device::findPlatform() {
 
 Platform Device::getPlatform() { return platform; }
 
+vrtd::Session::HostBuffer Device::allocHostBuffer(uint64_t length) {
+    if (platform != Platform::HARDWARE) {
+        throw std::runtime_error(
+            "allocHostBuffer requires the hardware platform: the slave-bridge "
+            "address it returns has no meaning under emulation or simulation");
+    }
+    if (!vrtdSession || !vrtdDevice.has_value()) {
+        throw std::runtime_error("allocHostBuffer: device is not attached to vrtd");
+    }
+    return vrtdSession->allocHostBuffer(*vrtdDevice, length);
+}
+
 std::shared_ptr<ZmqServer> Device::getZmqServer() { return zmqServer; }
 
 std::vector<QdmaConnection> Device::getQdmaConnections() { return qdmaConnections; }
