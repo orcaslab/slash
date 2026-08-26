@@ -33,4 +33,11 @@ case "$1" in
     ;;
 esac
 
+# dh_installsystemd and dh_installudev append their enable+start and
+# rule-reload snippets here. Without this token debhelper has nowhere to put
+# them and drops them silently: the units ship in the package but are never
+# enabled, so vrtd does not come up on boot and a "packaged" install still
+# needs a manual `systemctl enable --now vrtd.socket`.
+#DEBHELPER#
+
 exit 0
