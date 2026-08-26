@@ -32,7 +32,7 @@ SLASH_VERSION := unknown
 endif
 
 # This exists when installed for dkms
-LIBQDMA_LOCAL_DIR := ./libqdma
+LIBQDMA_LOCAL_DIR := libqdma
 # This exists when building from tree
 LIBQDMA_FALLBACK  := ../submodules/qdma_drv/QDMA/linux-kernel/driver/libqdma
 
