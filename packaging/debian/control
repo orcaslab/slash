@@ -49,8 +49,13 @@ Description: SLASH/VRT System for simulation and emulation
 Package: slash-dkms
 Architecture: all
 Depends: dkms, gcc, make, patch, ${misc:Depends}
+Recommends: shim-signed
 Provides: slash-kernel-module
 Description: SLASH kernel module (DKMS)
+ Built and reinstalled by DKMS on every kernel upgrade. On a Secure Boot
+ system the postinst also enrols the machine-local key DKMS signs the module
+ with, via shim-signed's update-secureboot-policy; without that enrolment the
+ kernel refuses to load the module.
 
 Package: libslash
 Architecture: any

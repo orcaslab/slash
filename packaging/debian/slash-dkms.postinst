@@ -1,0 +1,70 @@
+#!/bin/sh
+# ##################################################################################################
+#  The MIT License (MIT)
+#  Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+#  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+#  and associated documentation files (the "Software"), to deal in the Software without restriction,
+#  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+#  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
+#
+#  The above copyright notice and this permission notice shall be included in all copies or
+#  substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+# NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# ##################################################################################################
+
+set -e
+
+# dh_dkms's add/build/install snippet lands here.
+#DEBHELPER#
+
+# ------------------------------------------------------------------------------
+# Secure Boot: enrol the key DKMS just signed the module with.
+#
+# DKMS signs out-of-tree modules with the machine-local MOK and will create that
+# key on demand (it calls `update-secureboot-policy --new-key`), but nothing in
+# the dkms or shim-signed maintainer scripts ever calls `--enroll-key`. The
+# result on a Secure Boot machine is a module that builds, installs, and is
+# signed -- and that the kernel then refuses to load:
+#
+#     modprobe: ERROR: could not insert 'slash': Key was rejected by service
+#     dmesg:    Loading of module with unavailable key is rejected
+#
+# with nothing in the install output hinting at why. Doing it here means
+# `apt install` is the whole procedure: the debconf prompt asks for a one-time
+# password and the enrolment completes at the next boot.
+#
+# `--enroll-key` is a no-op when the key is already enrolled (it gates on
+# `mokutil --test-key`), and it also sets `mokutil --timeout -1` so MokManager
+# waits for the user instead of timing out after ten seconds and silently
+# discarding the request.
+# ------------------------------------------------------------------------------
+secureboot_enabled() {
+    _v=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
+    [ -e "$_v" ] || return 1
+    [ "$(od -An -t u1 "$_v" 2>/dev/null | awk '{print $NF}')" = "1" ]
+}
+
+case "$1" in
+  configure)
+    if command -v update-secureboot-policy >/dev/null 2>&1 && secureboot_enabled; then
+        # Never fail the install over this: the module is built and installed
+        # either way, and a machine whose owner declines enrolment should still
+        # end up with a configured package.
+        update-secureboot-policy --new-key   >/dev/null 2>&1 || true
+        if ! update-secureboot-policy --enroll-key; then
+            echo "slash-dkms: could not queue Secure Boot key enrolment." >&2
+            echo "slash-dkms: run 'sudo update-secureboot-policy --enroll-key'" >&2
+            echo "slash-dkms: (or disable Secure Boot) or the module will not load." >&2
+        fi
+    fi
+    ;;
+esac
+
+exit 0
