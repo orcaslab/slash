@@ -260,10 +260,18 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
 
         }
         if (vrtdDevice.has_value()) {
-            if (clockFreq > CLOCK_MAX_FREQ) {
+            // Program the shell's clocking wizard to the frequency the vbin
+            // was built (and timing-capped) for. The shell boots user_clk at
+            // 200 MHz; without this write the recorded ClockFrequency is
+            // metadata only and every design runs at the boot clock.
+            uint64_t targetFreq = clockFreq;
+            if (targetFreq > CLOCK_MAX_FREQ) {
                 utils::Logger::log(utils::LogLevel::WARN, __PRETTY_FUNCTION__,
                            "Clock frequency {} exceeds maximum frequency {}", clockFreq, CLOCK_MAX_FREQ);
-                vrtdDevice->setUserClockRate(static_cast<uint32_t>(CLOCK_MAX_FREQ));
+                targetFreq = CLOCK_MAX_FREQ;
+            }
+            if (targetFreq > 0) {
+                vrtdDevice->setUserClockRate(static_cast<uint32_t>(targetFreq));
             }
         }
     } else if (platform == Platform::EMULATION) {
