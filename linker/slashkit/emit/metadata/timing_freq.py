@@ -224,6 +224,8 @@ def _resolve_hw_build_dir(explicit_hw_build_dir: Optional[Path]) -> Optional[Pat
 def _find_timing_report(project_name: str, hw_build_dir: Path) -> Optional[Path]:
     slash_rm_dir = hw_build_dir / "rm" / f"slash_{project_name}"
     candidates = [
+        # current layout: <out>.prj/slash_rm/report_timing_<proj>.txt
+        hw_build_dir / "slash_rm" / f"report_timing_{project_name}.txt",
         slash_rm_dir / f"report_timing_{project_name}.txt",
         slash_rm_dir / "report_timing.txt",
     ]
