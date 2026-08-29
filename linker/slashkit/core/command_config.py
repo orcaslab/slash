@@ -412,6 +412,24 @@ class LinkerConfiguration(CommandConfiguration):
     def clock_hz(self) -> Optional[int]:
         return self._clock_hz
 
+    @property
+    def user_clk_freq_hz(self) -> int:
+        """Requested kernel (user_clk) frequency in Hz.
+
+        Resolution order: explicit --clock-hz, then the fastest [clock]
+        freqhz from the configuration file, then the compute shell's
+        boot default of 200 MHz. This is the frequency the RM build is
+        constrained at and the frequency recorded (post timing cap) in
+        system_map.xml for the runtime to program.
+        """
+        if self._clock_hz:
+            return int(self._clock_hz)
+        clocks = getattr(self.configuration, "clocks", None) or []
+        freqs = [int(c.freq_hz) for c in clocks if int(c.freq_hz) > 0]
+        if freqs:
+            return max(freqs)
+        return 200_000_000
+
 
 INSTALL_HELP_EPILOG = f"""
 Purpose:

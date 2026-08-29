@@ -24,6 +24,7 @@ import tarfile
 from pathlib import Path
 
 from slashkit.core.command_config import LinkerConfiguration
+from slashkit.emit.metadata.timing_freq import apply_timing_frequency_cap
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,18 @@ def build_vbin(config: LinkerConfiguration) -> Path:
     for file in files:
         if not file.exists():
             raise FileNotFoundError(file)
+
+    # Cap the recorded ClockFrequency to what routed WNS allows, measured
+    # against the frequency the build was actually constrained at. VRT
+    # programs the shell's clocking wizard from this value at device open,
+    # so a design that misses timing runs at its achievable clock instead
+    # of silently claiming the request.
+    apply_timing_frequency_cap(
+        project_name=config.project_name,
+        system_map_path=system_map,
+        base_freq_hz=config.user_clk_freq_hz,
+        hw_build_dir=config.build_dir,
+    )
 
     logger.info("Creating vbin archive: %s", config.out_path)
 

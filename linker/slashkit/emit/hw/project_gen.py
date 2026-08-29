@@ -405,6 +405,11 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             util_report_path.parent.mkdir(parents=True, exist_ok=True)
             cmd.extend(["--util-report-file", str(util_report_path)])
 
+            # Constrain the RM at the requested kernel clock. Without this the
+            # build inherits user_clk's baked-in 200 MHz from slash_base.bd and
+            # every [clock] freqhz request is silently ignored at timing.
+            cmd.extend(["--user-clk-freq-hz", str(config.user_clk_freq_hz)])
+
             for path in config.pre_synth_tcls:
                 cmd.extend(["--pre-synth-tcl", str(path)])
 

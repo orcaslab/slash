@@ -44,6 +44,7 @@ array set opts {
     --artifact-out-dir ""
     --util-report-file ""
     --jobs 8
+    --user-clk-freq-hz ""
 }
 
 set pre_synth_tcls [list]
@@ -145,6 +146,25 @@ set imported_bd [file join $rm_work_dir "${slash_proj_name}.srcs" "sources_1" "b
 open_bd_design $imported_bd
 foreach p [get_bd_intf_ports] {
     set_property HDL_ATTRIBUTE.LOCKED {TRUE} $p
+}
+
+# Constrain the design at the requested kernel clock. slash_base.bd bakes
+# user_clk in at the shell's 200 MHz boot frequency; without both edits below,
+# a [clock] freqhz request changes metadata only and timing is still closed at
+# 200 MHz. The port FREQ_HZ drives the BD/OOC synthesis constraints; the LATE
+# create_clock at the partition boundary pin overrides the clock the static
+# shell DCP propagates into implementation. The runtime (VRT) then programs
+# the shell's clocking wizard to the recorded frequency at device open.
+set user_clk_hz $opts(--user-clk-freq-hz)
+if {$user_clk_hz ne "" && [expr {$user_clk_hz > 0}]} {
+    set_property CONFIG.FREQ_HZ $user_clk_hz [get_bd_ports /user_clk]
+    set period_ns [expr {1000000000.0 / double($user_clk_hz)}]
+    set ovr_xdc [file join $rm_work_dir user_clk_override.xdc]
+    set fh [open $ovr_xdc w]
+    puts $fh "create_clock -name user_clk_rm -period [format %.3f $period_ns] \[get_pins top_i/slash/user_clk\]"
+    close $fh
+    import_files -fileset constrs_1 -norecurse $ovr_xdc
+    set_property -dict { used_in_synthesis false processing_order LATE } [get_files *user_clk_override.xdc]
 }
 source $generated_bd_tcl
 
