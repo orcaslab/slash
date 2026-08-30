@@ -167,15 +167,15 @@ if {$user_clk_hz ne "" && [expr {$user_clk_hz > 0}]} {
     # Re-issuing create_clock with an existing clock's name and source pins
     # replaces that definition, so the shell's boot-frequency clock takes the
     # requested period and no second clock appears.
-    set ovr_body {
-set _c [get_clocks -quiet -of_objects [get_pins -quiet top_i/slash/user_clk]]
-if {[llength $_c] > 0} {
-    create_clock -name [get_property NAME [lindex $_c 0]] -period @PERIOD@ \
-        [get_property SOURCE_PINS [lindex $_c 0]]
-} else {
-    create_clock -name user_clk_rm -period @PERIOD@ [get_pins top_i/slash/user_clk]
-}
-}
+    # XDC accepts command substitution but NOT control flow -- an `if` here is
+    # rejected with "Command 'if' is not supported in the xdc constraint file"
+    # and the whole file is skipped, silently leaving the shell's period in
+    # place. Keep this to a single create_clock whose name and source pins are
+    # substituted from the clock already on the net, so the definition is
+    # replaced rather than duplicated. If no clock is found, get_property
+    # errors and the build fails loudly instead of producing a bitstream
+    # constrained at a frequency nobody asked for.
+    set ovr_body {create_clock -name [get_property NAME [get_clocks -of_objects [get_pins top_i/slash/user_clk]]] -period @PERIOD@ [get_property SOURCE_PINS [get_clocks -of_objects [get_pins top_i/slash/user_clk]]]}
     set ovr_body [string map [list @PERIOD@ [format %.3f $period_ns]] $ovr_body]
     set fh [open $ovr_xdc w]
     puts $fh $ovr_body
@@ -216,6 +216,18 @@ report_timing -max_paths 10 -unique_pins -sort_by slack -input_pins -file $worst
 set partial_pdi [file join $artifact_out_dir "top_i_slash_slash_${proj_name}_inst_0_partial.pdi"]
 write_device_image -cell top_i/slash -force $partial_pdi
 write_debug_probes -cell top_i/slash -force $ltx_file
+# Record the period the design was actually timed at. The frequency cap must
+# divide WNS into this, not into what was requested: if a constraint fails to
+# apply, the two differ and computing against the request turns a timing miss
+# into an overclock (a 300 MHz request on a design left at 200 MHz reported
+# 279 MHz for a design that closed at 190).
+set _uclk [get_clocks -quiet -of_objects [get_pins -quiet top_i/slash/user_clk]]
+if {[llength $_uclk] > 0} {
+    set _fh [open [file join $linker_results_dir user_clk_period_ns.txt] w]
+    puts $_fh [get_property PERIOD [lindex $_uclk 0]]
+    close $_fh
+}
+
 report_utilization -hierarchical -hierarchical_percentages -file $util_report_file
 
 # Device-level area: totals and percentages for LUT (logic vs memory), SRL,

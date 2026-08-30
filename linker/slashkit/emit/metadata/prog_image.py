@@ -62,10 +62,34 @@ def build_vbin(config: LinkerConfiguration) -> Path:
     # programs the shell's clocking wizard from this value at device open,
     # so a design that misses timing runs at its achievable clock instead
     # of silently claiming the request.
+    # Measure WNS against the period the design was actually constrained at,
+    # which the RM build records. Falling back to the requested frequency is
+    # only safe when the two agree; when a constraint fails to apply they do
+    # not, and dividing WNS into the request reports a frequency far above
+    # what the design closed at.
+    base_freq_hz = config.user_clk_freq_hz
+    period_file = config.build_dir / "user_clk_period_ns.txt"
+    try:
+        period_ns = float(period_file.read_text().strip())
+        if period_ns > 0:
+            actual_hz = int(1e9 / period_ns)
+            if actual_hz != base_freq_hz:
+                logger.warning(
+                    "Design was timed at %d Hz but %d Hz was requested; "
+                    "capping against the timed frequency.",
+                    actual_hz, base_freq_hz,
+                )
+            base_freq_hz = actual_hz
+    except (OSError, ValueError):
+        logger.warning(
+            "No recorded constraint period at %s; capping against the "
+            "requested %d Hz.", period_file, base_freq_hz,
+        )
+
     apply_timing_frequency_cap(
         project_name=config.project_name,
         system_map_path=system_map,
-        base_freq_hz=config.user_clk_freq_hz,
+        base_freq_hz=base_freq_hz,
         hw_build_dir=config.build_dir,
     )
 
