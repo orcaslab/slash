@@ -188,9 +188,27 @@ launch_runs impl_1 -jobs $jobs
 wait_on_run impl_1
 open_run impl_1
 
-report_timing_summary -delay_type min_max -check_timing_verbose -max_paths 1 -input_pins -routable_nets -file $timing_report_file
+report_timing_summary -delay_type min_max -check_timing_verbose -max_paths 10 -unique_pins -input_pins -routable_nets -file $timing_report_file
+
+# Flat list of the ten worst paths, one per unique pin set, worst slack first.
+# report_timing_summary groups by clock and repeats endpoints that share a
+# driver, so it answers "is timing met" but not "which distinct paths fail".
+set worst_paths_file [file rootname $timing_report_file]_worst_paths[file extension $timing_report_file]
+report_timing -max_paths 10 -unique_pins -sort_by slack -input_pins -file $worst_paths_file
 
 set partial_pdi [file join $artifact_out_dir "top_i_slash_slash_${proj_name}_inst_0_partial.pdi"]
 write_device_image -cell top_i/slash -force $partial_pdi
 write_debug_probes -cell top_i/slash -force $ltx_file
 report_utilization -hierarchical -hierarchical_percentages -file $util_report_file
+
+# Device-level area: totals and percentages for LUT (logic vs memory), SRL,
+# registers, BRAM, URAM and DSP, plus the per-SLR distribution and SLL usage.
+# The hierarchical report above carries none of those, and its table is what
+# the XML converter parses, so this goes to its own file. The RM-only totals
+# are appended so the AFU's footprint can be read without the shell's.
+set area_report_file [file rootname $util_report_file]_area[file extension $util_report_file]
+report_utilization -file $area_report_file
+set rm_cell [get_cells -quiet top_i/slash]
+if {[llength $rm_cell] > 0} {
+    report_utilization -cells $rm_cell -file $area_report_file -append
+}
