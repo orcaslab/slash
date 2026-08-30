@@ -733,6 +733,7 @@ static uint64_t clock_driver_program_mdo_and_reconfig(
  * output divider quality (divisible by 4, then even), then by VCO frequency.
  */
 struct clock_candidate {
+    uint32_t overshoot;    /* 1 if achieved_hz > target_hz */
     uint64_t diff_hz;      /* Absolute frequency error: |achieved - target| */
     uint64_t achieved_hz;  /* Frequency this candidate produces */
     uint32_t m;            /* Feedback multiplier */
@@ -745,6 +746,7 @@ struct clock_candidate {
  * Compare two clock candidates for sorting.
  *
  * Ordering priority (best first):
+ *   0. Does not exceed the target frequency.
  *   1. Smallest frequency error (diff_hz).
  *   2. O divisible by 4 (stable, easy-to-represent output divisors).
  *   3. Even O values (better duty cycle symmetry).
@@ -758,6 +760,20 @@ static int clock_driver_candidate_cmp(
     const struct clock_candidate *b
 )
 {
+    /*
+     * Never run a design faster than it was asked to run. The achievable
+     * rates are coarse (~7% apart around 200 MHz), so ranking purely by
+     * |error| picks a rate above the target whenever that is numerically
+     * closer -- which overclocks a bitstream past the frequency its timing
+     * closed at. A candidate at or below the target therefore always wins,
+     * however much closer the one above it is. Candidates above the target
+     * are still ranked (and used) when the target is below every achievable
+     * rate.
+     */
+    if (a->overshoot != b->overshoot) {
+        return (a->overshoot < b->overshoot) ? -1 : 1;
+    }
+
     if (a->diff_hz != b->diff_hz) {
         return (a->diff_hz < b->diff_hz) ? -1 : 1;
     }
@@ -863,6 +879,7 @@ static size_t clock_driver_generate_candidates(
                     ? (achieved_hz - target_hz)
                     : (target_hz - achieved_hz);
                 struct clock_candidate candidate = {
+                    .overshoot = (achieved_hz > target_hz) ? 1u : 0u,
                     .diff_hz = diff_hz,
                     .achieved_hz = achieved_hz,
                     .m = m,
