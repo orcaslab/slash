@@ -160,8 +160,25 @@ if {$user_clk_hz ne "" && [expr {$user_clk_hz > 0}]} {
     set_property CONFIG.FREQ_HZ $user_clk_hz [get_bd_ports /user_clk]
     set period_ns [expr {1000000000.0 / double($user_clk_hz)}]
     set ovr_xdc [file join $rm_work_dir user_clk_override.xdc]
+    # Redefine the clock that already drives this net rather than adding a
+    # second one. Two clock definitions on one physical net make Vivado
+    # analyse crossings between them that cannot exist in hardware, and the
+    # design WNS then belongs to a phantom path instead of to real logic.
+    # Re-issuing create_clock with an existing clock's name and source pins
+    # replaces that definition, so the shell's boot-frequency clock takes the
+    # requested period and no second clock appears.
+    set ovr_body {
+set _c [get_clocks -quiet -of_objects [get_pins -quiet top_i/slash/user_clk]]
+if {[llength $_c] > 0} {
+    create_clock -name [get_property NAME [lindex $_c 0]] -period @PERIOD@ \
+        [get_property SOURCE_PINS [lindex $_c 0]]
+} else {
+    create_clock -name user_clk_rm -period @PERIOD@ [get_pins top_i/slash/user_clk]
+}
+}
+    set ovr_body [string map [list @PERIOD@ [format %.3f $period_ns]] $ovr_body]
     set fh [open $ovr_xdc w]
-    puts $fh "create_clock -name user_clk_rm -period [format %.3f $period_ns] \[get_pins top_i/slash/user_clk\]"
+    puts $fh $ovr_body
     close $fh
     import_files -fileset constrs_1 -norecurse $ovr_xdc
     set_property -dict { used_in_synthesis false processing_order LATE } [get_files *user_clk_override.xdc]
