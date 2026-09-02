@@ -1644,7 +1644,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_00/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X0Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1669,7 +1669,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_01/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X2Y15} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1694,7 +1694,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_02/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y14} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1719,7 +1719,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_03/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X3Y16} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1744,7 +1744,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_04/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X0Y17} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1769,7 +1769,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_05/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1794,7 +1794,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_06/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X2Y14} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1819,7 +1819,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_07/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X3Y15} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
