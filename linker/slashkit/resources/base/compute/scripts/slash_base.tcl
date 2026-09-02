@@ -1629,6 +1629,31 @@ proc create_root_design { parentCell } {
   set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $hbm_bandwidth_71
 
 
+  # ---------------------------------------------------------------------
+  # hbm_vnoc_00..07 carry MEM_TAG (HBM_VNOC_INI_00..07) to the HBM.
+  #
+  # Their CONFIG.PHYSICAL_LOC values below are NOT arbitrary and must not be
+  # cleared. Left empty, the NoC compiler scatters these eight ingress units
+  # across dies -- it placed 7 of 8 in SLR1 -- while every NOC_NMU_HBM2E site
+  # on this device is in SLR2 (SLR0: 0, SLR1: 0, SLR2: 64), and top.tcl pins
+  # the HBM ports explicitly. That anchors user memory traffic on a different
+  # die from the HBM it feeds, costing ~0.456 ns of inter-SLR clock
+  # compensation on every path in the user clock domain.
+  #
+  # A reconfigurable module cannot correct it: this shell's routes become the
+  # RM's locked NoC solution, and DRC HDPR-122 then allows each RM NoC port
+  # exactly one site -- the one chosen here. It is only fixable at this layer.
+  #
+  # The eight sites below are distinct, inside pblock_slash, and in SLR2
+  # (NMU512 rows Y13..Y17; 20 such sites exist, 8 are needed). Measured on a
+  # tinyGPU RM: WNS -0.260 (278.3 MHz) unpinned -> -0.034 (297.0 MHz) pinned,
+  # and 300.000 MHz with post-route phys_opt. The shell still meets its own
+  # timing (+0.098 / +0.023, vs +0.103 / +0.034 unpinned).
+  #
+  # Easy to miss because this shell is implemented with clk_wizard_slash at
+  # 200 MHz (top.tcl), where that crossing is 9% of a 5 ns budget. RMs link at
+  # 300 MHz, where it is 14% of 3.333 ns.
+  # ---------------------------------------------------------------------
   # Create instance: hbm_vnoc_00, and set properties
   set hbm_vnoc_00 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 hbm_vnoc_00 ]
   set_property -dict [list \
