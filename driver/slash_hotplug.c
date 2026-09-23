@@ -279,12 +279,35 @@ static int slash_hotplug_handle_toggle_sbr(const char *bdf)
      * Available since kernel 5.9; guaranteed present on our minimum targets
      * (RHEL 9 / Ubuntu 22.04, both ship kernel >= 5.14).
      */
-    ret = pci_bridge_secondary_bus_reset(bridge);
+    /*
+     * pci_reset_bus() rather than a bare pci_bridge_secondary_bus_reset():
+     * it walks the devices behind the bridge and calls each bound driver's
+     * reset_prepare()/reset_done() around the reset, on top of the config
+     * save/restore the bare call already does.
+     *
+     * That notification is what keeps the host alive. Drivers on this card
+     * poll it on timers -- AMI's heartbeat and logging threads run every
+     * 500 ms -- so with a ~1 s link-training window a poll lands inside the
+     * reset by construction. An MMIO read with the link down is an
+     * unsupported request or a completion timeout, and this platform
+     * escalates uncorrectable PCIe errors through APEI firmware-first, whose
+     * answer is a sync flood: the whole host resets, leaving only a generic
+     * "processor error" BERT record that looks nothing like its true cause.
+     *
+     * Callers that remove every function first (vrtd's reset path) were never
+     * exposed to this; callers that reset a live bus were.
+     */
+    ret = pci_reset_bus(bridge);
+    if (ret == -ENOTTY) {
+        /* No reset method available behind this bridge; fall back. */
+        pr_info("slash_hotplug: toggle_sbr: pci_reset_bus unavailable, using bridge SBR\n");
+        ret = pci_bridge_secondary_bus_reset(bridge);
+    }
     if (ret) {
-        pr_err("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset failed (%d)\n", ret);
+        pr_err("slash_hotplug: toggle_sbr: bus reset failed (%d)\n", ret);
         goto out_put;
     }
-    pr_info("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset OK\n");
+    pr_info("slash_hotplug: toggle_sbr: bus reset OK\n");
 
     /*
      * Post-SBR link training delay.  The PCIe spec requires at minimum
