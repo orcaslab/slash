@@ -627,12 +627,93 @@ static void drain_deferred_buffer_cleanups(struct vrtd *state)
  *
  * @param client  The client to destroy.
  */
+
+/*
+ * The card's management controller must be up before a design write: a
+ * transfer into a card whose AMC is gone hangs, and recovering it then takes a
+ * cold power cycle. Only states in which the AMI driver itself still allows
+ * device programming pass.
+ */
+static bool design_write_amc_ready(const struct device *d, char *state, size_t state_len)
+{
+    char pf0_bdf[VRTD_PCI_BDF_LEN] = {0};
+    if (pci_bdf_set_function(d->pci_info.bdf, 0, pf0_bdf) != 0) {
+        snprintf(state, state_len, "unknown PF0");
+        return false;
+    }
+
+    ami_device *dev = NULL;
+    if (ami_dev_find(pf0_bdf, &dev) != AMI_STATUS_OK) {
+        snprintf(state, state_len, "AMI device %s not found", pf0_bdf);
+        return false;
+    }
+    char buf[AMI_DEV_STATE_SIZE] = {0};
+    int ret = ami_dev_get_state(dev, buf);
+    ami_dev_delete(&dev);
+    if (ret != AMI_STATUS_OK) {
+        snprintf(state, state_len, "unreadable");
+        return false;
+    }
+    snprintf(state, state_len, "%s", buf);
+    return strcmp(buf, AMI_DEV_READY_STR) == 0 || strcmp(buf, "MISSING_INFO") == 0;
+}
+
+/*
+ * Replace a design only from a safe state: card healthy, previous design
+ * clocked below every image's timed rate. The client sets the new design's
+ * own rate once the write has completed.
+ */
+static uint16_t design_write_prepare(struct device *d)
+{
+    if (d->needs_reset) {
+        LOG(LOG_ERR, "design_write: refusing %s: a previous design write failed; "
+            "the card must be reset first", d->pci_info.bdf);
+        return VRTD_RET_DEVICE_UNHEALTHY;
+    }
+
+    char state[AMI_DEV_STATE_SIZE + 48] = {0};
+    if (!design_write_amc_ready(d, state, sizeof(state))) {
+        LOG(LOG_ERR, "design_write: refusing %s: AMC state is %s; "
+            "the card must be reset before it can be programmed", d->pci_info.bdf, state);
+        return VRTD_RET_DEVICE_UNHEALTHY;
+    }
+
+    if (d->clock_driver == NULL || clock_driver_park_user_region(d->clock_driver) != 0) {
+        LOG(LOG_ERR, "design_write: refusing %s: cannot park the user clock", d->pci_info.bdf);
+        return VRTD_RET_DEVICE_UNHEALTHY;
+    }
+    return VRTD_RET_OK;
+}
+
+/* A design whose client is gone must not keep running at its own rate. */
+static void client_release_design(struct client *client)
+{
+    if (client->owned_design_bdf[0] == '\0' || client->state == NULL) {
+        return;
+    }
+    struct device *d = device_ptr_array_find_by_bdf(&client->state->devices, client->owned_design_bdf);
+    client->owned_design_bdf[0] = '\0';
+    if (d == NULL || !d->design_owner_valid || d->design_owner_conn != client->conn_id) {
+        return;
+    }
+    d->design_owner_valid = false;
+    if (d->design_writer != NULL && design_writer_is_busy(d->design_writer)) {
+        return;
+    }
+    if (d->clock_driver != NULL) {
+        LOG(LOG_INFO, "Client conn_id=%llu that loaded the design on %s is gone; parking its clock",
+            (unsigned long long)client->conn_id, d->pci_info.bdf);
+        (void) clock_driver_park_user_region(d->clock_driver);
+    }
+}
+
 void cleanup_client(struct client *client)
 {
     if (client == NULL) {
         return;
     }
 
+    client_release_design(client);
     cleanup_client_buffers(client);
 
     gid_t_array_free(&client->gids);
@@ -1473,12 +1554,17 @@ static int client_finalize_pending_design_write(struct client *client)
     uint16_t design_write_ret = VRTD_RET_OK;
     if (transfer_error == 0) {
         design_write_ret = device_refresh_pf2_after_design_write(d);
+        d->design_owner_valid = true;
+        d->design_owner_conn = client->conn_id;
+        strncpy(client->owned_design_bdf, d->pci_info.bdf, sizeof(client->owned_design_bdf) - 1);
         LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
             (unsigned int)client->uid, (unsigned long long)client->conn_id);
     } else {
         LOG(LOG_WARNING, "Design write failed (error=%d) for uid=%u conn_id=%llu",
             transfer_error, (unsigned int)client->uid, (unsigned long long)client->conn_id);
         design_write_ret = VRTD_RET_INTERNAL_ERROR;
+        d->needs_reset = true;
+        d->design_owner_valid = false;
     }
 
     struct vrtd_req_header *req_header = CLIENT_IN_HEADER(*client);
@@ -1864,6 +1950,11 @@ static uint16_t client_handle_request_design_write(
             LOG(LOG_ERR, "design_write: device %s missing after shell reset", target_bdf);
             return VRTD_RET_NOEXIST;
         }
+    }
+
+    uint16_t prepare_ret = design_write_prepare(d);
+    if (prepare_ret != VRTD_RET_OK) {
+        return prepare_ret;
     }
 
     /*

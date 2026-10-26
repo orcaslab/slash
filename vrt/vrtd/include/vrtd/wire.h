@@ -144,6 +144,7 @@ enum vrtd_ret {
     VRTD_RET_AUTH_ERROR, ///< User does not have permission to execute request.
     VRTD_RET_BUSY, ///< Requested resource is busy.
     VRTD_RET_SHELL_LOCKED, ///< Device is JTAG-booted and will not be auto-reset for shell switching.
+    VRTD_RET_DEVICE_UNHEALTHY, ///< The card must be reset before it can be programmed (AMC not ready, user clock cannot be parked, or a previous design write failed).
 };
 
 /**

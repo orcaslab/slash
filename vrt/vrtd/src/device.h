@@ -34,7 +34,9 @@
 #ifndef VRTD_DEVICE_H
 #define VRTD_DEVICE_H
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include <slash/ctldev.h>
 #include <slash/qdma.h>
@@ -71,6 +73,11 @@ struct device {
     struct design_writer *design_writer;
     /** @brief Clock frequency control subsystem via AXI clock wizard (owning, may be NULL). */
     struct clock_driver *clock_driver;
+    /** @brief Connection whose design write loaded the current design; valid when design_owner_valid. */
+    uint64_t design_owner_conn;
+    bool design_owner_valid;
+    /** @brief A design write failed: the card must be reset before the next one. */
+    bool needs_reset;
     /** @brief HBM/DDR address-range allocator for DMA buffer placement (owning, may be NULL). */
     struct device_memory_map *memory_map;
     /** @brief Currently allocated DMA buffers on this device (owning array). */

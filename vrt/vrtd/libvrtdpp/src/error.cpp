@@ -69,6 +69,9 @@ const char *Error::what() const noexcept {
     case VRTD_RET_SHELL_LOCKED:
         return "Device is JTAG-booted; refusing automatic shell reset";
 
+    case VRTD_RET_DEVICE_UNHEALTHY:
+        return "The card must be reset before it can be programmed (see the vrtd log)";
+
     default:
         return "Unknown error";
     }

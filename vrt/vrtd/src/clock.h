@@ -169,4 +169,35 @@ int clock_driver_get_user_region_rate_hz(struct clock_driver *clk, uint32_t *rat
  */
 int clock_driver_set_user_region_rate_hz(struct clock_driver *clk, uint32_t *rate_hz_inout);
 
+
+/*
+ * User clock a design is parked at while it is being replaced or after its
+ * client went away: below every image's timed rate, so no bitstream ever runs
+ * past its timing, whichever design is on the card.
+ */
+#define CLOCK_DRIVER_SAFE_USER_RATE_HZ 50000000u
+
+/**
+ * Plan the divider settings for a target rate without touching hardware:
+ * the best candidate the driver would program first. Returns 0 and fills the
+ * outputs, or -1 if no candidate exists. Exposed for unit tests.
+ */
+int clock_driver_plan_rate_hz(
+    uint32_t prim_in_hz,
+    uint32_t target_hz,
+    uint32_t *m_out,
+    uint32_t *d_out,
+    uint32_t *o_out,
+    uint64_t *rate_hz_out
+);
+
+/** Realized output divider for an O value as the driver encodes it. */
+uint32_t clock_driver_realized_divo(uint32_t o);
+
+/**
+ * Park the user region at CLOCK_DRIVER_SAFE_USER_RATE_HZ and verify lock.
+ * Returns 0 when the user clock is locked at or below the safe rate.
+ */
+int clock_driver_park_user_region(struct clock_driver *clk);
+
 #endif // VRTD_CLOCK_H

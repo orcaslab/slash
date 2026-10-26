@@ -58,6 +58,7 @@
  */
 
 #include "clock.h"
+#include "clock_math.h"
 
 #include <inttypes.h>
 #include <errno.h>
@@ -389,27 +390,7 @@ static uint64_t clock_driver_get_rate_hz(struct clock_driver *clk, uint32_t wiza
         : (XCLK_WIZ_REG19_OFFSET + clock_id * 8u);
     uint32_t reg_off = clock_driver_reg(wizard_offset, leaf_off);
 
-    /* First register of the leaf pair: edge, p5en, prediv2 flags. */
-    uint32_t reg = clock_driver_r32(clk, reg_off);
-    uint32_t edge = (reg & (1u << XCLK_WIZ_CLKOUT0_P5FEDGE_SHIFT)) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
-    uint32_t p5en = (reg & XCLK_WIZ_P5EN_MASK) ? 1u : 0u;   /* TODO(vserbu): explain this register offset/bit field */
-    uint32_t prediv = (reg & XCLK_WIZ_REG3_PREDIV2) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
-
-    /* Second register of the leaf pair: low-time and high-time counts. */
-    uint32_t reg2 = clock_driver_r32(clk, reg_off + 4u);
-    uint32_t low = reg2 & XCLK_WIZ_CLKFBOUT_L_MASK;
-    uint32_t high = (reg2 & XCLK_WIZ_CLKFBOUT_H_MASK) >> XCLK_WIZ_CLKFBOUT_H_SHIFT;
-
-    /*
-     * Decode the effective output divider from the register fields.
-     * leaf = high_count + low_count + edge
-     * divo = (prediv + 1) * leaf + (prediv * p5en)
-     */
-    uint32_t leaf = high + low + edge;
-    uint32_t divo = (prediv + 1u) * leaf + (prediv * p5en);
-    if (divo == 0) {
-        divo = 1;
-    }
+    uint32_t divo = xclk_decode_divo(clock_driver_r32(clk, reg_off), clock_driver_r32(clk, reg_off + 4u));
 
     return fvco / divo;
 }
@@ -435,17 +416,8 @@ static uint32_t clock_driver_effective_divo_from_o(uint32_t o)
     if (o > XCLK_O_MAX) {
         o = XCLK_O_MAX;
     }
-
-    uint32_t high_time = o / 4u;
-    uint32_t edge = o % 2u;
-    uint32_t p5en = ((o % 4u) <= 1u) ? 0u : 1u;
-    uint32_t leaf = (high_time * 2u) + edge;
-    uint32_t divo = (2u * leaf) + p5en;
-    if (divo == 0) {
-        divo = 1u;
-    }
-
-    return divo;
+    struct xclk_leaf_regs r = xclk_encode_o(o);
+    return xclk_decode_divo(r.ctrl, r.counts);
 }
 
 /**
@@ -529,20 +501,9 @@ static void clock_driver_update_o(struct clock_driver *clk, uint32_t wizard_offs
         : (XCLK_WIZ_REG19_OFFSET + clock_id * 8u);
     uint32_t reg_off = clock_driver_reg(wizard_offset, leaf_off);
 
-    /* Encode O into high_time, div_edge, p5_enable, and p5f_edge fields. */
-    uint32_t high_time = o / 4u;
-    uint32_t reg = XCLK_WIZ_REG3_PREDIV2 | XCLK_WIZ_REG3_USED | XCLK_WIZ_REG3_MX;  /* TODO(vserbu): explain this register offset/bit field */
-
-    uint32_t div_edge = ((o % 4u) <= 1u) ? 0u : 1u;
-    reg |= (div_edge << 8u);  /* TODO(vserbu): explain this register offset/bit field */
-
-    uint32_t p5f_edge = o % 2u;
-    uint32_t p5_enable = o % 2u;
-    reg |= (p5_enable << XCLK_WIZ_CLKOUT0_P5EN_SHIFT) |
-           (p5f_edge << XCLK_WIZ_CLKOUT0_P5FEDGE_SHIFT);  /* TODO(vserbu): explain this register offset/bit field */
-
-    clock_driver_w32(clk, reg_off, reg);
-    clock_driver_w32(clk, reg_off + 4u, (high_time | (high_time << 8u)));  /* TODO(vserbu): explain this register offset/bit field */
+    struct xclk_leaf_regs r = xclk_encode_o(o);
+    clock_driver_w32(clk, reg_off, r.ctrl);
+    clock_driver_w32(clk, reg_off + 4u, r.counts);
 }
 
 /**
@@ -1008,6 +969,17 @@ static int clock_driver_try_set_rate_hz(
 
         clock_driver_log_state(clk, wizard_offset, clock_id, "after_program");
 
+        if (ok == 0 && !cand->overshoot && reported > *rate_hz_inout) {
+            /* A locked clock above the request would overclock the design. */
+            LOG(
+                LOG_ERR,
+                "clock_driver: read-back %" PRIu64 " Hz exceeds request_hz=%u for m=%u d=%u o=%u;"
+                " rejecting candidate=%zu/%zu",
+                reported, *rate_hz_inout, clk->m, clk->d, clk->o, i + 1u, count
+            );
+            continue;
+        }
+
         if (ok == 0) {
             LOG(
                 LOG_INFO,
@@ -1164,4 +1136,52 @@ int clock_driver_set_user_region_rate_hz(struct clock_driver *clk, uint32_t *rat
         );
     }
     return ret;
+}
+
+int clock_driver_plan_rate_hz(
+    uint32_t prim_in_hz,
+    uint32_t target_hz,
+    uint32_t *m_out,
+    uint32_t *d_out,
+    uint32_t *o_out,
+    uint64_t *rate_hz_out
+)
+{
+    struct clock_driver clk = { .prim_in_hz = prim_in_hz };
+    struct clock_candidate candidates[CLOCK_DRIVER_DEFAULT_MAX_CANDIDATES];
+    size_t count = clock_driver_generate_candidates(&clk, target_hz, candidates,
+                                                    CLOCK_DRIVER_DEFAULT_MAX_CANDIDATES);
+    if (count == 0) {
+        errno = ERANGE;
+        return -1;
+    }
+    *m_out = candidates[0].m;
+    *d_out = candidates[0].d;
+    *o_out = candidates[0].o;
+    uint64_t fvco_hz = ((uint64_t)prim_in_hz * candidates[0].m) / candidates[0].d;
+    *rate_hz_out = fvco_hz / clock_driver_effective_divo_from_o(candidates[0].o);
+    return 0;
+}
+
+uint32_t clock_driver_realized_divo(uint32_t o)
+{
+    return clock_driver_effective_divo_from_o(o);
+}
+
+int clock_driver_park_user_region(struct clock_driver *clk)
+{
+    uint32_t rate = CLOCK_DRIVER_SAFE_USER_RATE_HZ;
+    if (clock_driver_set_user_region_rate_hz(clk, &rate) != 0) {
+        LOG(LOG_ERR, "clock_driver: cannot park the user clock at %u Hz: %m",
+            CLOCK_DRIVER_SAFE_USER_RATE_HZ);
+        return -1;
+    }
+    if (rate > CLOCK_DRIVER_SAFE_USER_RATE_HZ) {
+        LOG(LOG_ERR, "clock_driver: parked user clock reads %u Hz, above the safe %u Hz",
+            rate, CLOCK_DRIVER_SAFE_USER_RATE_HZ);
+        errno = ERANGE;
+        return -1;
+    }
+    LOG(LOG_INFO, "clock_driver: user clock parked at %u Hz", rate);
+    return 0;
 }
