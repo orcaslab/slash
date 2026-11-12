@@ -9,8 +9,9 @@ bound to the static region clock) linked against the compute shell (the shell th
 uses). The connectivity file is parsed, the instances bound, and the whole slash Tcl rendered by
 generate_tcl; the rendered Tcl must wire each master straight to its HBM_AXI port (no SmartConnect,
 no terminator on it), drive the HBM-side clock from static_region_clk and the control clock from
-user_clk, and leave the unused HBM ports terminated. N = 32 (one master a pseudo-channel), 54 (two
-a pseudo-channel on PCs 5-31) and 64 (every port)."""
+user_clk, and connect nothing to the unused HBM ports (slashkit leaves unused HBM_AXI ports open, as
+in every image without HBM bindings). N = 32 (one master a pseudo-channel), 54 (two a
+pseudo-channel on PCs 5-31) and 64 (every port)."""
 
 import re
 from pathlib import Path
@@ -81,10 +82,10 @@ def test_direct_ports_render(tmp_path, n):
     for h in hbm:
         assert not re.search(rf"\[get_bd_intf_ports HBM_AXI_{h:02d}\]\s*$", "\n".join(
             l for l in t.split("\n") if "axi_term" in l or "terminator" in l.lower()), re.M)
-    # The unused HBM ports are terminated (the shell's HBM ports must all be driven).
-    unused = [h for h in range(64) if h not in hbm]
-    for h in unused:
-        assert f"HBM_AXI_{h:02d}" in t, f"HBM_AXI_{h:02d} left unterminated"
+    # Nothing is connected to the unused HBM ports.
+    for h in range(64):
+        if h not in hbm:
+            assert not re.search(rf"connect_bd_intf_net[^\n]*HBM_AXI_{h:02d}\]", t), f"HBM_AXI_{h:02d} connected"
     # Clocks: the HBM side from the static region clock, the control side from user_clk.
     assert re.search(r"connect_bd_net \[get_bd_pins foldsim_afu_0/hbm_clk\] \[get_bd_ports static_region_clk\]", t)
     assert re.search(r"connect_bd_net \[get_bd_pins foldsim_afu_0/ap_clk\] \[get_bd_pins user_clk\]", t)
@@ -112,3 +113,26 @@ def test_two_masters_on_a_direct_channel_fail(tmp_path):
     conf._clock_hz = 200_000_000
     with pytest.raises(ValueError, match="one master"):
         generate_tcl(conf)
+
+
+def test_foldsim_flow_cfg(tmp_path):
+    """The cfg Foldsim's flow writes for a kernel with 32 direct static ports (foldsim_flow.py cfg, [platform]
+    hbm_direct: m_axi_hbm_<p> on HBM channel 2p, hbm_clk on STATIC), with the kernel's interfaces as its top has them."""
+    src = Path(__file__).resolve().parents[2] / "fixtures" / "foldsim_direct" / "link.cfg"
+    cfg = parse_connectivity_file(src)
+    conf = LinkerConfiguration.__new__(LinkerConfiguration)
+    kernel = _kernel(32)
+    conf._configuration = cfg
+    conf._kernels = [kernel]
+    conf._kernel_instances = apply_config_to_instances(cfg, [kernel])
+    conf._bd_ports = load_bd_ports_from_lines(generate_bd_port_lines(num_ddr=12, num_virt=0))
+    conf._build_dir = tmp_path
+    conf._project_name = "foldsim_direct"
+    conf._clock_hz = 200_000_000
+    generate_tcl(conf)
+    t = _joined((tmp_path / "slash.tcl").read_text())
+    for k in range(32):
+        assert re.search(rf"connect_bd_intf_net\s+\[get_bd_intf_pins foldsim_afu_0/m_axi_hbm_{k}\]\s+"
+                         rf"\[get_bd_intf_ports HBM_AXI_{2 * k:02d}\]", t)
+    assert not re.search(r"smartconnect:1.0 hbm_sc_", t)
+    assert re.search(r"connect_bd_net \[get_bd_pins foldsim_afu_0/hbm_clk\] \[get_bd_ports static_region_clk\]", t)
