@@ -718,7 +718,7 @@ set {{ name }} [ create_bd_cell -type ip -vlnv {{ inst.kernel.vlnv }} {{ name }}
 
 # === Connect kernel clocks to aclk1 ===
 {% for c in clocks %}
-connect_bd_net [get_bd_pins {{ c.src_pin }}] [get_bd_pins user_clk]
+connect_bd_net [get_bd_pins {{ c.src_pin }}] {{ c.dst|default('[get_bd_pins user_clk]') }}
 {% endfor %}
 
 # === Connect kernel resets to ap_rst_n ===
