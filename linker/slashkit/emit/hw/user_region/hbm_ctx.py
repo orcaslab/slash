@@ -53,6 +53,7 @@ def build_hbm_smartconnect_context(
     """
     # Gather AXI4FULL kernel pins targeting HBM<i>
     by_hbm: Dict[int, List[str]] = defaultdict(list)
+    direct: Dict[int, bool] = {}
 
     for inst in instances.values():
         mem_sp = inst.params.get("mem_sp", {})
@@ -74,6 +75,8 @@ def build_hbm_smartconnect_context(
                 continue
 
             by_hbm[idx].append(f"{inst.name}/{k_port}")
+            if tgt.get("direct"):
+                direct[idx] = True
 
     hbm_reduce_nodes: List[dict] = []
     hbm_root_create: List[dict] = []
@@ -88,6 +91,16 @@ def build_hbm_smartconnect_context(
         # Destination BD port name (HBM_AXI_XX)
         dst_bd = bd.mem("HBM", h_idx)
         dst_port = dst_bd.rtl_name or dst_bd.name
+
+        # sp=...:HBM<k>:DIRECT: the kernel master already presents the port's
+        # width and clock (a clk= binding to the static region clock): wired
+        # straight to HBM_AXI_<k>, no SmartConnect. One master a channel.
+        if direct.get(h_idx):
+            if len(sources) != 1:
+                raise ValueError(
+                    f"HBM{h_idx}: a DIRECT binding takes one master; {len(sources)} map there: {sources}")
+            hbm_root_out.append({"src_pin": sources[0], "dst_port": dst_port})
+            continue
 
         # Root SC config: 2 clocks (aclk, aclk1), 1 SI, 1 MI
         root_name = f"{base_name}_{h_idx:02d}"

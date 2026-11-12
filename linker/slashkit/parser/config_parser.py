@@ -105,16 +105,39 @@ def _parse_stream_connect_value(val: str) -> StreamConnect:
 
 def _parse_sp_value(val: str) -> SpMapping:
     """
-    Expects: 'inst.port:HBM0' or 'inst.port:DDR3'
+    Expects: 'inst.port:HBM0', 'inst.port:DDR3', or 'inst.port:HBM5:DIRECT'
+    (the kernel presents the HBM port's width and clock: no SmartConnect).
+    """
+    try:
+        parts = val.split(":")
+        left, right = parts[0], parts[1]
+        flags = [x.strip().upper() for x in parts[2:]]
+        inst, port = left.split(".", 1)
+    except Exception as e:
+        raise ValueError(
+            f"Invalid sp '{val}'. Expected 'inst.port:TARGET[:DIRECT]'") from e
+    target = _parse_target(right.strip())
+    if any(f != "DIRECT" for f in flags):
+        raise ValueError(f"Invalid sp '{val}': the only flag is DIRECT")
+    direct = "DIRECT" in flags
+    if direct and target.domain != "HBM":
+        raise ValueError(f"Invalid sp '{val}': DIRECT applies to HBM<k> targets only")
+    return SpMapping(inst=inst.strip(), port=port.strip(), target=target, direct=direct)
+
+
+def _parse_clk_value(val: str) -> ClockBind:
+    """
+    Expects: 'inst.port:STATIC' -- the kernel clock input driven by the shell's
+    static region clock (the direct HBM ports' 400 MHz) instead of user_clk.
     """
     try:
         left, right = val.split(":")
         inst, port = left.split(".", 1)
     except Exception as e:
-        raise ValueError(
-            f"Invalid sp '{val}'. Expected 'inst.port:TARGET'") from e
-    target = _parse_target(right.strip())
-    return SpMapping(inst=inst.strip(), port=port.strip(), target=target)
+        raise ValueError(f"Invalid clk '{val}'. Expected 'inst.port:STATIC'") from e
+    if right.strip().upper() != "STATIC":
+        raise ValueError(f"Invalid clk '{val}': the only source is STATIC")
+    return ClockBind(inst=inst.strip(), port=port.strip(), source="static_region_clk")
 
 
 def _parse_debug_net_value(val: str) -> DebugNetSpec:
@@ -185,6 +208,8 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                 )
             elif line.startswith("sp="):
                 cfg.sps.append(_parse_sp_value(line.split("=", 1)[1].strip()))
+            elif line.startswith("clk="):
+                cfg.clock_binds.append(_parse_clk_value(line.split("=", 1)[1].strip()))
             elif line.startswith("shell="):
                 val = line.split("=", 1)[1].strip().lower()
                 if val not in ("compute", "service"):
@@ -316,6 +341,24 @@ def apply_config_to_instances(
         mem_map: Dict[str, dict] = inst.params.setdefault("mem_sp", {})
         mem_map[canon_port] = {
             "domain": sp.target.domain, "index": sp.target.index}
+        if sp.direct:
+            width = inst.kernel.port(canon_port).width
+            if width is not None and width != 256:
+                raise ValueError(
+                    f"[connectivity] sp '{sp.inst}.{sp.port}:...:DIRECT' needs a 256-bit port "
+                    f"(the HBM port's width); kernel '{inst.kernel.name}' has {width}.")
+            mem_map[canon_port]["direct"] = True
+
+    # 3b) Clock bindings: a kernel clock input on the static region clock
+    for cb in cfg.clock_binds:
+        if cb.inst not in instances:
+            raise KeyError(f"[connectivity] clk refers to unknown instance '{cb.inst}'.")
+        inst = instances[cb.inst]
+        canon_port = _resolve_port_name_for_kernel(inst.kernel, cb.port)
+        if inst.kernel.port(canon_port).ptype != BusType.CLOCK:
+            raise ValueError(
+                f"[connectivity] clk '{cb.inst}.{cb.port}' is not a clock port on kernel '{inst.kernel.name}'.")
+        inst.params.setdefault("clk_bind", {})[canon_port] = cb.source
 
     # 4) Per-instance fallback: fill ONLY the missing AXI4FULL ports with MEM (round-robin later)
     for inst in instances.values():
