@@ -131,8 +131,7 @@ def test_pools_round_robin_and_cells(tmp_path, monkeypatch):
             assert re.search(rf"create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc {c} ", t)
             assert re.search(rf"connect_bd_intf_net \[get_bd_intf_ports {p}\] \[get_bd_intf_pins {c}/M00_INI\]", t)
             assert re.search(rf"connect_bd_net \[get_bd_pins user_clk\] \[get_bd_pins {c}/aclk0\]", t)
-            assert re.search(rf"set_property APERTURES \{{\{{0x4000000000 1G\}}.*\{{0x47C0000000 1G\}}\}} "
-                             rf"\[get_bd_intf_ports {p}\]", t)
+            assert re.search(rf"set_property APERTURES \{{\{{0x40_0000_0000 32G\}}\}} \[get_bd_intf_ports {p}\]", t)
     assert "read_bw {4000} write_bw {4000}" in t
 
 

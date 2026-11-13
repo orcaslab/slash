@@ -88,8 +88,9 @@ proc asl_tg   {slr idx} { return [format "hbm_s%d_tg_%02d" $slr $idx] }
 proc asl_rp {} {
   if {[llength $::asl_ports] == 0} { return }
   set n [llength $::asl_ports]
-  set apertures [list]
-  foreach s [asl_pc_segments] { lappend apertures [list [format "0x%X" [lindex $s 1]] 1G] }
+  # One contiguous 32 GB aperture (all 32 pseudo-channels). A list of 32 adjacent 1 GB apertures
+  # is not merged, and the generator's 32 GB assignment below would not fit any one of them.
+  set apertures {{0x40_0000_0000 32G}}
 
   # AXI-Lite for the traffic generators: one more SmartConnect hung off the end of the chain.
   set sc5 [get_bd_cells smartconnect_5]
