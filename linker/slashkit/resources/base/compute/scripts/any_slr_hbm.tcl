@@ -159,14 +159,17 @@ proc asl_static {} {
         lappend conns HBM${k}_PORT${p} [list read_bw $per_pc write_bw $per_pc read_avg_burst 64 write_avg_burst 64 initial_boot false]
       }
     }
-    set_property -dict [list CONFIG.INI_STRATEGY {auto} CONFIG.CONNECTIONS $conns] \
-      [get_bd_intf_pins /static_region/noc/axi_noc_cips/$nsi]
-
+    # Wire the INI first: the HBM slave segments of the input only appear once its CONNECTIONS
+    # are set on a connected pin (set before wiring, the input has no segments to assign).
     create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:inimm_rtl:1.0 /static_region/noc/$pt
     create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:inimm_rtl:1.0 /static_region/$pt
     connect_bd_intf_net [get_bd_intf_pins /static_region/noc/axi_noc_cips/$nsi] [get_bd_intf_pins /static_region/noc/$pt]
     connect_bd_intf_net [get_bd_intf_pins /static_region/noc/$pt] [get_bd_intf_pins /static_region/$pt]
     connect_bd_intf_net [get_bd_intf_pins /slash/$pt] [get_bd_intf_pins /static_region/$pt]
+    set_property -dict [list CONFIG.INI_STRATEGY {auto} CONFIG.CONNECTIONS $conns] \
+      [get_bd_intf_pins /static_region/noc/axi_noc_cips/$nsi]
+    set nseg [llength [get_bd_addr_segs -quiet -of_objects [get_bd_intf_pins /static_region/noc/axi_noc_cips/$nsi]]]
+    if {$nseg != 32} { error "any_slr_hbm: $nsi has $nseg HBM segments, expected 32" }
 
     set tg [asl_tg $slr $idx]
     foreach s [asl_pc_segments] {
