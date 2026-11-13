@@ -161,7 +161,11 @@ Connectivity Configuration Format:
 
     sp=<inst>.<port>:<memory_target>
       Example: sp=vadd_0.m_axi_gmem0:HBM0
-      Maps AXI4-Full memory ports to memory banks (HBM0-31, DDR0-3, MEM, HOST).
+      Maps AXI4-Full memory ports to memory banks (HBM0-63, DDR0-3, MEM, HOST).
+      MEM sees all 32 GB of HBM through NoC ingress units in SLR2. On an any-SLR
+      HBM compute shell, MEM_SLR0 and MEM_SLR1 see the same window through
+      ingress units in SLR0 and SLR1 (MEM_SLR2 = MEM): bind a master to the pool
+      of the SLR its logic sits in, so HBM traffic crosses dies on the NoC.
 
   [clock]  - Specify per-kernel clock frequencies (can be repeated)
     krnl=<instance_name>

@@ -47,6 +47,7 @@ from slashkit.emit.metadata.system_map_ctx import (
 from slashkit.emit.hw.service_region.service_layer_ctx import *
 
 from slashkit.core.command_config import LinkerConfiguration, ShellType
+from slashkit.core.mem_pools import MEM_POOLS, POOL_BW_MBPS, shell_pools
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,58 @@ def _collect_used_targets(ctx: dict) -> set[str]:
         used.add(item["dst_pin"])
 
     return used
+
+
+def installed_base_bd(shell_type: ShellType):
+    """! @brief Path of the installed shell's user-region BD, or None if not installed."""
+    from importlib import resources
+    pkg = (
+        "slashkit.resources.static_shell_compute.slash_base"
+        if shell_type == ShellType.COMPUTE
+        else "slashkit.resources.static_shell.slash_base"
+    )
+    try:
+        p = resources.files(pkg) / "slash_base.bd"
+    except (ModuleNotFoundError, FileNotFoundError):
+        return None
+    return p if p.is_file() else None
+
+
+def build_mem_pools_context(instances: dict, shell_type: ShellType, base_bd=None) -> dict:
+    """! @brief Round-robin every whole-HBM pool (MEM, MEM_SLR0, MEM_SLR1) to its NoC ingress.
+
+    Pools other than MEM exist only on any-SLR HBM shells. The RM must recreate their NoC cells
+    whenever the installed shell has them (the shell's NoC solution names them), so they are
+    listed in "mem_pool_nocs" even when no kernel uses them.
+    """
+    available = shell_pools(base_bd) if shell_type == ShellType.COMPUTE else ["MEM"]
+    wanted = set()
+    for inst in instances.values():
+        for port, tgt in inst.params.get("mem_sp", {}).items():
+            d = str(tgt.get("domain", "")).upper()
+            if d in MEM_POOLS:
+                wanted.add(d)
+    missing = sorted(d for d in wanted if d not in available)
+    if missing:
+        raise ValueError(
+            f"Memory target(s) {', '.join(missing)} need an any-SLR HBM static shell; the "
+            "installed shell has no per-SLR HBM ports. Rebuild/install the shell or use MEM."
+        )
+    ctx = {"mem_direct": [], "mem_smart_nodes": [], "mem_smart_roots": [],
+           "mem_pool_nocs": [], "mem_pools": available, "mem_pool_bw": POOL_BW_MBPS}
+    for name in available:
+        pool = MEM_POOLS[name]
+        sub = build_mem_smartconnect_context(
+            instances, num_mem_ports=pool.num_ports, max_si=16,
+            base_name=pool.sc_base, noc_pin_fmt=pool.noc_pin_fmt, domain=name)
+        for k in ("mem_direct", "mem_smart_nodes", "mem_smart_roots"):
+            ctx[k] += sub[k]
+        if pool.shell_feature:
+            ctx["mem_pool_nocs"] += [
+                {"name": pool.noc_cell(i), "port": pool.ini_port(i)}
+                for i in range(pool.num_ports)
+            ]
+    return ctx
 
 
 def print_memory_maps(k):
@@ -267,8 +320,8 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     ctx.update(build_axilite_smartconnect_context(instances))
     ctx.update(build_hbm_smartconnect_context(instances, bd, max_si=16))
     ctx.update(build_ddr_smartconnect_context(instances, max_si=16))
-    ctx.update(build_mem_smartconnect_context(
-        instances, num_mem_ports=8, max_si=16))
+    ctx.update(build_mem_pools_context(
+        instances, config.shell_type, installed_base_bd(config.shell_type)))
     ctx.update(build_host_smartconnect_context(instances, bd, max_si=16))
     if config.shell_type == ShellType.SERVICE:
         ctx.update(build_virt_smartconnect_context(instances, bd, max_si=16))
@@ -316,9 +369,13 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     terms_ddr_noc = build_ddr_noc_terminators(
         used_targets, num_ddr=num_ddr, noc_pin_fmt="/ddr_noc_{index}/S00_AXI"
     )
-    terms_mem_noc = build_mem_noc_terminators(
-        used_targets, num_mem=8, noc_pin_fmt="/hbm_vnoc_0{index}/S00_AXI"
-    )
+    terms_mem_noc = {"axi_terminators": []}
+    for name in ctx.get("mem_pools", ["MEM"]):
+        pool = MEM_POOLS[name]
+        terms_mem_noc["axi_terminators"] += build_mem_noc_terminators(
+            used_targets, num_mem=pool.num_ports, noc_pin_fmt=pool.noc_pin_fmt,
+            base_name=pool.term_base,
+        )["axi_terminators"]
     if config.shell_type == ShellType.SERVICE:
         terms_virt_noc = build_virt_noc_terminators(
             used_targets, num_virt=4, noc_pin_fmt="/noc_virt_0{index}/S00_AXI"

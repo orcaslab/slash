@@ -79,6 +79,25 @@ application to manage individual channels.
 The allocation type is set to ``BufferAllocType::HbmVnoc`` and no specific
 ``HBMRegion`` is selected.
 
+Kernel ports reach this memory through the ``MEM`` link target. On the V80
+every HBM-side NoC entry point is in SLR2, so ``MEM`` enters the NoC in SLR2.
+An any-SLR HBM compute shell adds the targets ``MEM_SLR0`` and ``MEM_SLR1``,
+which reach the same 32 GB window through NoC entry points in SLR0 and SLR1
+(``MEM_SLR2`` is another name for ``MEM``). Bind a port to the target of the
+SLR its logic is placed in; the traffic then crosses dies inside the NoC
+instead of on fabric:
+
+.. code-block:: ini
+
+   [connectivity]
+   sp=sm_0.m_axi_mem:MEM_SLR0
+   sp=sm_1.m_axi_mem:MEM_SLR1
+   sp=sm_2.m_axi_mem:MEM
+
+Buffers for all three are ``MemoryRangeType::HBM_VNOC``; no runtime change is
+needed. Linking ``MEM_SLR0``/``MEM_SLR1`` against a shell without those ports
+fails at link time.
+
 MemoryConfig and Port Mapping
 ==============================
 

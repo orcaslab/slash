@@ -120,6 +120,10 @@ update_compile_order -fileset sources_1
   set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports QDMA_SLAVE_BRIDGE_0]
   set_property APERTURES {{0x202_0000_0000 128M}} [get_bd_intf_ports S_AXILITE_INI]
   {% endraw %}
+{% for n in mem_pool_nocs|default([]) %}
+  # same window as the shell sets on these ports (any_slr_hbm.tcl): the 32 HBM pseudo-channels
+  set_property APERTURES {% raw %}{{0x4000000000 1G} {0x4040000000 1G} {0x4080000000 1G} {0x40C0000000 1G} {0x4100000000 1G} {0x4140000000 1G} {0x4180000000 1G} {0x41C0000000 1G} {0x4200000000 1G} {0x4240000000 1G} {0x4280000000 1G} {0x42C0000000 1G} {0x4300000000 1G} {0x4340000000 1G} {0x4380000000 1G} {0x43C0000000 1G} {0x4400000000 1G} {0x4440000000 1G} {0x4480000000 1G} {0x44C0000000 1G} {0x4500000000 1G} {0x4540000000 1G} {0x4580000000 1G} {0x45C0000000 1G} {0x4600000000 1G} {0x4640000000 1G} {0x4680000000 1G} {0x46C0000000 1G} {0x4700000000 1G} {0x4740000000 1G} {0x4780000000 1G} {0x47C0000000 1G}}{% endraw %} [get_bd_intf_ports {{ n.port }}]
+{% endfor %}
  # Create instance: ddr_noc_0, and set properties
   set ddr_noc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc ddr_noc_0 ]
   set_property -dict [list \
@@ -577,6 +581,29 @@ update_compile_order -fileset sources_1
  ] [get_bd_pins /hbm_vnoc_07/aclk0]
 
   # Create instance: xlconstant_0, and set properties
+{% for n in mem_pool_nocs|default([]) %}
+  # Per-SLR HBM ingress {{ n.name }} -> {{ n.port }} (any-SLR HBM shell; site locked by the shell)
+  set {{ n.name }} [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc {{ n.name }} ]
+  set_property -dict [list \
+    CONFIG.NSI_NAMES {} \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+    CONFIG.NUM_NSI {0} \
+  ] ${{ n.name }}
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /{{ n.name }}/M00_INI]
+  set_property -dict [ list \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {{ "{" ~ mem_pool_bw ~ "}" }} write_bw {{ "{" ~ mem_pool_bw ~ "}" }}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /{{ n.name }}/S00_AXI]
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /{{ n.name }}/aclk0]
+  connect_bd_intf_net [get_bd_intf_ports {{ n.port }}] [get_bd_intf_pins {{ n.name }}/M00_INI]
+
+{% endfor %}
   set xlconstant_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_0 ]
 
   # Create instance: axi_noc_0, and set properties
@@ -704,6 +731,9 @@ update_compile_order -fileset sources_1
   [get_bd_pins qdma_slave_bridge_noc/aclk0] \
   [get_bd_pins axi_noc_0/aclk0] \
   [get_bd_pins c_shift_ram_0/CLK]
+{% for n in mem_pool_nocs|default([]) %}
+  connect_bd_net [get_bd_pins user_clk] [get_bd_pins {{ n.name }}/aclk0]
+{% endfor %}
 
 # === Instantiate kernel IPs ===
 {% for name, inst in instances.items() %}
