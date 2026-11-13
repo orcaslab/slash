@@ -75,7 +75,7 @@ MEM_POOLS: Dict[str, MemPool] = {
 
 # NoC bandwidth reserved per per-SLR ingress unit (MB/s, read and write). Must equal the shell's
 # value (resources/base/compute/scripts/any_slr_hbm.tcl, asl_bw).
-POOL_BW_MBPS = 4000
+POOL_BW_MBPS = 3000
 
 # Targets that are other names for a pool.
 MEM_POOL_ALIASES: Dict[str, str] = {"MEM_SLR2": "MEM"}

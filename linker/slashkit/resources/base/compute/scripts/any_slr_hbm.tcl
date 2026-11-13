@@ -60,7 +60,7 @@ if {![info exists ::asl_ports]} {
 # Bandwidth reserved per new port (MB/s, each direction). The static side spreads it evenly over
 # the 32 pseudo-channels.
 if {![info exists ::asl_bw]} {
-  set ::asl_bw 4000
+  set ::asl_bw 3000
 }
 # First axi_noc_cips NoC slave input used for the new ports (the shipped shell uses S00..S20).
 set ::asl_nsi_base 21

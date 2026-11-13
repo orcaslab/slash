@@ -132,7 +132,7 @@ def test_pools_round_robin_and_cells(tmp_path, monkeypatch):
             assert re.search(rf"connect_bd_intf_net \[get_bd_intf_ports {p}\] \[get_bd_intf_pins {c}/M00_INI\]", t)
             assert re.search(rf"connect_bd_net \[get_bd_pins user_clk\] \[get_bd_pins {c}/aclk0\]", t)
             assert re.search(rf"set_property APERTURES \{{\{{0x40_0000_0000 32G\}}\}} \[get_bd_intf_ports {p}\]", t)
-    assert "read_bw {4000} write_bw {4000}" in t
+    assert "read_bw {3000} write_bw {3000}" in t
 
 
 def test_old_shell_unchanged(tmp_path, monkeypatch):
