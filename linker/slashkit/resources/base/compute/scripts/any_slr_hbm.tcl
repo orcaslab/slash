@@ -65,6 +65,11 @@ if {![info exists ::asl_bw]} {
 # First axi_noc_cips NoC slave input used for the new ports (the shipped shell uses S00..S20).
 set ::asl_nsi_base 21
 
+# NoC CONNECTIONS values are written in the exact brace form write_bd_tcl uses
+# ("M00_INI {read_bw {500} write_bw {500}}"). A plain Tcl list ("read_bw 500") is accepted by
+# set_property but not parsed: the NMU is left without its S00_AXI->M00_INI bridge and the
+# generator gets no address path.
+
 # HBM pseudo-channel address map (same as HBM_VNOC_INI_*): HBM<k>_PC<p> at 0x40_0000_0000 + (2k+p) GB.
 proc asl_pc_segments {} {
   set segs {}
@@ -112,7 +117,7 @@ proc asl_rp {} {
     set_property CONFIG.INI_STRATEGY {driver} [get_bd_intf_pins /$nm/M00_INI]
     set_property -dict [list \
       CONFIG.PHYSICAL_LOC $site \
-      CONFIG.CONNECTIONS [list M00_INI [list read_bw $::asl_bw write_bw $::asl_bw]] \
+      CONFIG.CONNECTIONS "M00_INI {read_bw {$::asl_bw} write_bw {$::asl_bw}}" \
       CONFIG.NOC_PARAMS {} \
       CONFIG.CATEGORY {pl} \
     ] [get_bd_intf_pins /$nm/S00_AXI]
@@ -156,9 +161,10 @@ proc asl_static {} {
     set conns [list]
     for {set k 0} {$k < 16} {incr k} {
       foreach p [list $off [expr {$off + 2}]] {
-        lappend conns HBM${k}_PORT${p} [list read_bw $per_pc write_bw $per_pc read_avg_burst 64 write_avg_burst 64 initial_boot false]
+        lappend conns "HBM${k}_PORT${p} {read_bw {$per_pc} write_bw {$per_pc} read_avg_burst {64} write_avg_burst {64} initial_boot {false}}"
       }
     }
+    set conns [join $conns " "]
     # Wire the INI first: the HBM slave segments of the input only appear once its CONNECTIONS
     # are set on a connected pin (set before wiring, the input has no segments to assign).
     create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:inimm_rtl:1.0 /static_region/noc/$pt
