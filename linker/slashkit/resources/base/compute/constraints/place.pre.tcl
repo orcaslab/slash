@@ -20,6 +20,10 @@
 ############################################################
 
 # Connect the DMA reset detection signal to the PMC Interrupt input to allow a full PDI reload to be triggered on PCIe hot reset
+# any-SLR HBM shell: the NoC compiler re-solves in place_design; default effort times out on
+# this traffic set and relaxes the whole solution (see scripts/any_slr_hbm.tcl).
+set_param noc.enableCompilerHiEffort true
+
 set PS9_IRQ_pin [get_pins -of [get_cells -hierarchical PS9_inst -filter { PARENT =~ "top_i/static_region/aved/cips*"}] -filter { REF_PIN_NAME =~ "PMCPLIRQ[4]"}]
 if {[llength ${PS9_IRQ_pin}] == 1} {
     # Remove dont_touch

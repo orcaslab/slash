@@ -57,10 +57,33 @@ if {![info exists ::asl_ports]} {
     {1 6 NOC_NMU512_X3Y8} {1 7 NOC_NMU512_X3Y10}
   }
 }
+# Ports kept per SLR (the first N of each SLR's rows above).
+if {![info exists ::asl_per_slr]} {
+  set ::asl_per_slr 8
+}
+if {$::asl_per_slr < 8} {
+  set keep {}
+  foreach r $::asl_ports { if {[lindex $r 1] < $::asl_per_slr} { lappend keep $r } }
+  set ::asl_ports $keep
+}
 # Bandwidth reserved per new port (MB/s, each direction). The static side spreads it evenly over
 # the 32 pseudo-channels.
 if {![info exists ::asl_bw]} {
-  set ::asl_bw 3000
+  set ::asl_bw 2000
+}
+# Pseudo-channels per new port. 32 = every port sees the whole 32 GB (16 x 32 = 512 extra NoC
+# paths: the NoC compiler times out and relaxes the whole solution, even at 500 MB/s per port).
+# 4 = port k of an SLR serves PCs {k, k+8, k+16, k+24}; the 8 ports of an SLR cover all 32 PCs once
+# (64 extra paths).
+if {![info exists ::asl_pcs_per_port]} {
+  set ::asl_pcs_per_port 4
+}
+# Booking of each of the 64 direct HBM_AXI ports (MB/s, each direction). The shipped shell books
+# 12,800 (the port's full rate), which leaves each HBM NSU port almost no room for any other path.
+# Flows use one direct port (HBM8, host staging); the bookings are Best Effort floors, not caps.
+# Empty = keep the shipped 12,800.
+if {![info exists ::asl_direct_bw]} {
+  set ::asl_direct_bw 2000
 }
 # First axi_noc_cips NoC slave input used for the new ports (the shipped shell uses S00..S20).
 set ::asl_nsi_base 21
@@ -79,6 +102,15 @@ proc asl_pc_segments {} {
     }
   }
   return $segs
+}
+
+# Pseudo-channels served by a port: all 32, or (asl_pcs_per_port=k < 32) a disjoint interleaved subset
+# {idx, idx+n, idx+2n, ...} with n = 32/k, so the n ports of one SLR together cover every PC once.
+proc asl_port_pcs {idx} {
+  if {$::asl_pcs_per_port >= 32} { set l {}; for {set p 0} {$p < 32} {incr p} { lappend l $p }; return $l }
+  set k $::asl_pcs_per_port; set n [expr {32 / $k}]; set l {}
+  for {set m 0} {$m < $k} {incr m} { lappend l [expr {($idx % $n) + $m * $n}] }
+  return $l
 }
 
 proc asl_name {slr idx} { return [format "hbm_s%d_noc_%02d" $slr $idx] }
@@ -111,7 +143,14 @@ proc asl_rp {} {
 
     set port [create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 $pt]
     set_property CONFIG.INI_STRATEGY {driver} $port
-    set_property APERTURES $apertures $port
+    if {$::asl_pcs_per_port < 32} {
+      set ap {}
+      foreach p [asl_port_pcs $idx] { lappend ap [list [format "0x%X" [expr {0x4000000000 + $p * 0x40000000}]] 1G] }
+      set_property APERTURES $ap $port
+      puts "any_slr_hbm: $pt serves pseudo-channels [asl_port_pcs $idx]"
+    } else {
+      set_property APERTURES $apertures $port
+    }
 
     set noc [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 $nm]
     set_property -dict [list CONFIG.NSI_NAMES {} CONFIG.NUM_MI {0} CONFIG.NUM_NMI {1} CONFIG.NUM_NSI {0}] $noc
@@ -133,8 +172,10 @@ proc asl_rp {} {
     connect_bd_intf_net [get_bd_intf_pins smartconnect_asl/M[format %02d $i]_AXI] [get_bd_intf_pins $tg/s_axi_control]
     connect_bd_net [get_bd_ports user_clk] [get_bd_pins $tg/ap_clk]
     connect_bd_net [get_bd_pins ilreduced_logic_0/Res] [get_bd_pins $tg/ap_rst_n]
+    if {$::asl_pcs_per_port >= 32} {
     assign_bd_address -offset 0x004000000000 -range 0x000800000000 \
       -target_address_space [get_bd_addr_spaces $tg/Data_m_axi_gmem0] [get_bd_addr_segs $pt/Reg] -force
+    }
     incr i
   }
   # Control registers of the new generators: next free slots in the S_AXILITE_INI window.
@@ -143,6 +184,16 @@ proc asl_rp {} {
 
 proc asl_static {} {
   if {[llength $::asl_ports] == 0} { return }
+  # The NoC compiler's default effort times out on this traffic set; high effort solves it.
+  set_param noc.enableCompilerHiEffort true
+  if {$::asl_direct_bw ne ""} {
+    foreach p [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM*_AXI] {
+      set c [get_property CONFIG.CONNECTIONS $p]
+      regsub -all {read_bw \{[0-9]+\}} $c "read_bw {$::asl_direct_bw}" c
+      regsub -all {write_bw \{[0-9]+\}} $c "write_bw {$::asl_direct_bw}" c
+      set_property CONFIG.CONNECTIONS $c $p
+    }
+  }
   set n [llength $::asl_ports]
   set cips [get_bd_cells /static_region/noc/axi_noc_cips]
   set nsi0 [get_property CONFIG.NUM_NSI $cips]
@@ -160,8 +211,11 @@ proc asl_static {} {
     # Alternate the HBM NSU ports per INI, as the MEM vNoC ports do (even: PORT0/2, odd: PORT1/3).
     set off [expr {$i % 2}]
     set conns [list]
+    set pcs [asl_port_pcs $idx]
+    set per_pc [expr {int(ceil(double($::asl_bw) / [llength $pcs]))}]
     for {set k 0} {$k < 16} {incr k} {
       foreach p [list $off [expr {$off + 2}]] {
+        if {[lsearch -exact $pcs [expr {2 * $k + $p / 2}]] < 0} continue
         lappend conns "HBM${k}_PORT${p} {read_bw {$per_pc} write_bw {$per_pc} read_avg_burst {64} write_avg_burst {64} initial_boot {false}}"
       }
     }
@@ -176,11 +230,12 @@ proc asl_static {} {
     set_property -dict [list CONFIG.INI_STRATEGY {auto} CONFIG.CONNECTIONS $conns] \
       [get_bd_intf_pins /static_region/noc/axi_noc_cips/$nsi]
     set nseg [llength [get_bd_addr_segs -quiet -of_objects [get_bd_intf_pins /static_region/noc/axi_noc_cips/$nsi]]]
-    if {$nseg != 32} { error "any_slr_hbm: $nsi has $nseg HBM segments, expected 32" }
+    if {$nseg != [llength $pcs]} { error "any_slr_hbm: $nsi has $nseg HBM segments, expected [llength $pcs]" }
 
     set tg [asl_tg $slr $idx]
     foreach s [asl_pc_segments] {
       lassign $s seg off
+      if {[lsearch -exact $pcs [expr {($off - 0x4000000000) / 0x40000000}]] < 0} continue
       assign_bd_address -offset [format "0x%012X" $off] -range 0x40000000 \
         -target_address_space [get_bd_addr_spaces slash/$tg/Data_m_axi_gmem0] \
         [get_bd_addr_segs static_region/noc/axi_noc_cips/$nsi/$seg] -force
@@ -188,3 +243,4 @@ proc asl_static {} {
     incr i
   }
 }
+

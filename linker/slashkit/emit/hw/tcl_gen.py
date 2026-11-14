@@ -47,7 +47,7 @@ from slashkit.emit.metadata.system_map_ctx import (
 from slashkit.emit.hw.service_region.service_layer_ctx import *
 
 from slashkit.core.command_config import LinkerConfiguration, ShellType
-from slashkit.core.mem_pools import MEM_POOLS, POOL_BW_MBPS, shell_pools
+from slashkit.core.mem_pools import MEM_POOLS, POOL_BW_MBPS, shell_pool, shell_pools
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,15 @@ def build_mem_pools_context(instances: dict, shell_type: ShellType, base_bd=None
             "installed shell has no per-SLR HBM ports. Rebuild/install the shell or use MEM."
         )
     ctx = {"mem_direct": [], "mem_smart_nodes": [], "mem_smart_roots": [],
-           "mem_pool_nocs": [], "mem_pools": available, "mem_pool_bw": POOL_BW_MBPS}
+           "mem_pool_nocs": [], "mem_pools": available, "mem_pool_bw": POOL_BW_MBPS,
+           "mem_pool_ports": {}}
+    pools = {}
     for name in available:
-        pool = MEM_POOLS[name]
+        pool = shell_pool(base_bd, name) if shell_type == ShellType.COMPUTE else MEM_POOLS[name]
+        if pool is None:  # shell_pools() saw the port name but no address window: use defaults
+            pool = MEM_POOLS[name]
+        pools[name] = pool
+        ctx["mem_pool_ports"][name] = pool.num_ports
         sub = build_mem_smartconnect_context(
             instances, num_mem_ports=pool.num_ports, max_si=16,
             base_name=pool.sc_base, noc_pin_fmt=pool.noc_pin_fmt, domain=name)
@@ -139,7 +145,8 @@ def build_mem_pools_context(instances: dict, shell_type: ShellType, base_bd=None
             ctx[k] += sub[k]
         if pool.shell_feature:
             ctx["mem_pool_nocs"] += [
-                {"name": pool.noc_cell(i), "port": pool.ini_port(i)}
+                {"name": pool.noc_cell(i), "port": pool.ini_port(i),
+                 "apertures": pool.apertures_tcl(i)}
                 for i in range(pool.num_ports)
             ]
     return ctx
@@ -373,7 +380,8 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     for name in ctx.get("mem_pools", ["MEM"]):
         pool = MEM_POOLS[name]
         terms_mem_noc["axi_terminators"] += build_mem_noc_terminators(
-            used_targets, num_mem=pool.num_ports, noc_pin_fmt=pool.noc_pin_fmt,
+            used_targets, num_mem=ctx.get("mem_pool_ports", {}).get(name, pool.num_ports),
+            noc_pin_fmt=pool.noc_pin_fmt,
             base_name=pool.term_base,
         )["axi_terminators"]
     if config.shell_type == ShellType.SERVICE:
@@ -420,6 +428,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         platform="Hardware",
         shell_type=config.shell_type.value,
         kernel_hls_by_type=kernel_hls_by_type,
+        pool_ports=ctx.get("mem_pool_ports"),
         network=getattr(cfg, "network", None),
     )
     system_map_out = config.build_dir / "system_map.xml"

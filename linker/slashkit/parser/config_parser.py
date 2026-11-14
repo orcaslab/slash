@@ -41,7 +41,7 @@ _RE_DEBUG_NET = re.compile(r"^\s*([^.:\s]+)\.([^.:\s]+)\s*$")
 
 
 # Per-SLR whole-HBM pools (core/mem_pools.py): MEM_SLR0, MEM_SLR1, MEM_SLR2 (= MEM).
-_RE_POOL_TARGET = re.compile(r"^\s*(MEM_SLR\d+)\s*$", re.IGNORECASE)
+_RE_POOL_TARGET = re.compile(r"^\s*(MEM_SLR\d+)(?:_(\d+))?\s*$", re.IGNORECASE)
 
 
 def _parse_target(s: str) -> MemoryTarget:
@@ -54,6 +54,10 @@ def _parse_target(s: str) -> MemoryTarget:
                 f"Unsupported memory target '{s}'. Per-SLR pools are MEM_SLR0, MEM_SLR1 and "
                 f"MEM_SLR2 ({', '.join(f'{a}={b}' for a, b in MEM_POOL_ALIASES.items())})."
             )
+        if mp.group(2) is not None:
+            if pool == "MEM":
+                raise ValueError(f"'{s}': MEM_SLR2 is MEM, which takes no unit index.")
+            return MemoryTarget(domain=pool, index=int(mp.group(2)))
         return MemoryTarget(domain=pool, index="")
     m = _RE_TARGET.match(s)
     if not m:

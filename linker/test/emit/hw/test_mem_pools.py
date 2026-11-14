@@ -131,8 +131,10 @@ def test_pools_round_robin_and_cells(tmp_path, monkeypatch):
             assert re.search(rf"create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc {c} ", t)
             assert re.search(rf"connect_bd_intf_net \[get_bd_intf_ports {p}\] \[get_bd_intf_pins {c}/M00_INI\]", t)
             assert re.search(rf"connect_bd_net \[get_bd_pins user_clk\] \[get_bd_pins {c}/aclk0\]", t)
-            assert re.search(rf"set_property APERTURES \{{\{{0x40_0000_0000 32G\}}\}} \[get_bd_intf_ports {p}\]", t)
-    assert "read_bw {3000} write_bw {3000}" in t
+            pcs = [i, i + 8, i + 16, i + 24]
+            ap = " ".join("{0x%X 1G}" % (0x4000000000 + q * 0x40000000) for q in pcs)
+            assert f"set_property APERTURES {{{ap}}} [get_bd_intf_ports {p}]" in t
+    assert "read_bw {2000} write_bw {2000}" in t
 
 
 def test_old_shell_unchanged(tmp_path, monkeypatch):
@@ -146,3 +148,44 @@ def test_old_shell_unchanged(tmp_path, monkeypatch):
 def test_pool_on_old_shell_fails(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="any-SLR HBM static shell"):
         _link(tmp_path, monkeypatch, ["MEM_SLR0"], any_slr=False)
+
+
+def test_unit_pcs_cover_every_pc_once():
+    for name in ("MEM_SLR0", "MEM_SLR1"):
+        p = MEM_POOLS[name]
+        seen = sorted(q for k in range(p.num_ports) for q in p.port_pcs(k))
+        assert seen == list(range(32))
+        assert p.port_pcs(3) == [3, 11, 19, 27]
+    assert MEM_POOLS["MEM"].port_pcs(0) == list(range(32))
+
+
+def test_parse_explicit_unit():
+    t = _parse_target("MEM_SLR1_5")
+    assert (t.domain, t.index) == ("MEM_SLR1", 5)
+    with pytest.raises(ValueError):
+        _parse_target("MEM_SLR2_1")
+
+
+def test_explicit_unit_binding(tmp_path, monkeypatch):
+    t = _link(tmp_path, monkeypatch, ["MEM_SLR0_6", "MEM_SLR1_2"])
+    assert re.search(r"\[get_bd_intf_pins tg_0/m_axi_gmem0\] \[get_bd_intf_pins /hbm_s0_noc_06/S00_AXI\]", t)
+    assert re.search(r"\[get_bd_intf_pins tg_1/m_axi_gmem0\] \[get_bd_intf_pins /hbm_s1_noc_02/S00_AXI\]", t)
+
+
+def test_pool_shape_read_from_shell_bd(tmp_path):
+    """Port count and windows come from the installed shell's BD (here 2 ports x 4 PCs)."""
+    import json
+    from slashkit.core.mem_pools import shell_pool
+    mm = {}
+    for s in (0, 1):
+        for k in range(2):
+            pcs = [k, k + 8, k + 16, k + 24]
+            mm[f"HBM_S{s}_INI_{k:02d}"] = {"address_blocks": {
+                f"Reg_{j}": {"base_address": hex(0x4000000000 + p * 0x40000000), "range": "1G",
+                             "width": "39", "usage": "register"} for j, p in enumerate(pcs)}}
+    bd = tmp_path / "slash_base.bd"
+    bd.write_text(json.dumps({"design": {"addressing": {"/": {"memory_maps": mm}}},
+                              "x": "HBM_S0_INI_00 HBM_S1_INI_00"}))
+    p = shell_pool(bd, "MEM_SLR1")
+    assert p.num_ports == 2 and p.port_pcs(1) == [1, 9, 17, 25]
+    assert p.apertures_tcl(0) == "{0x4000000000 1G} {0x4200000000 1G} {0x4400000000 1G} {0x4600000000 1G}"

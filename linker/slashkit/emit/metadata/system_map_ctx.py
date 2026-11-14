@@ -431,6 +431,7 @@ def build_system_map_context(
     num_mem_ports: int = 8,
     num_virt: int = 4,
     network: Optional[object] = None,
+    pool_ports: Optional[Dict[str, int]] = None,
 ) -> dict:
     axilite_by_inst: Dict[str, List[dict]] = {}
     for entry in axilite_addr:
@@ -438,7 +439,8 @@ def build_system_map_context(
 
     mem_indices = _assign_mem_indices(instances, num_mem_ports=num_mem_ports)
     pool_indices = {
-        name: _assign_mem_indices(instances, num_mem_ports=pool.num_ports, domain=name)
+        name: _assign_mem_indices(
+            instances, num_mem_ports=(pool_ports or {}).get(name, pool.num_ports), domain=name)
         for name, pool in MEM_POOLS.items() if name != "MEM"
     }
 

@@ -121,8 +121,8 @@ update_compile_order -fileset sources_1
   set_property APERTURES {{0x202_0000_0000 128M}} [get_bd_intf_ports S_AXILITE_INI]
   {% endraw %}
 {% for n in mem_pool_nocs|default([]) %}
-  # same window as the shell sets on these ports (any_slr_hbm.tcl): all 32 HBM pseudo-channels
-  set_property APERTURES {% raw %}{{0x40_0000_0000 32G}}{% endraw %} [get_bd_intf_ports {{ n.port }}]
+  # same window as the shell sets on this port (any_slr_hbm.tcl)
+  set_property APERTURES {{ "{" ~ n.apertures ~ "}" }} [get_bd_intf_ports {{ n.port }}]
 {% endfor %}
  # Create instance: ddr_noc_0, and set properties
   set ddr_noc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc ddr_noc_0 ]
