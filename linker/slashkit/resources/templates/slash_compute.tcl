@@ -594,7 +594,7 @@ update_compile_order -fileset sources_1
    CONFIG.INI_STRATEGY {{ "{" ~ n.strategy ~ "}" }} \
  ] [get_bd_intf_pins /{{ n.name }}/M00_INI]
   set_property -dict [ list \
-   CONFIG.CONNECTIONS {M00_INI {read_bw {{ "{" ~ mem_pool_bw ~ "}" }} write_bw {{ "{" ~ mem_pool_bw ~ "}" }}}} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {{ "{" ~ n.bw ~ "}" }} write_bw {{ "{" ~ n.bw ~ "}" }}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
  ] [get_bd_intf_pins /{{ n.name }}/S00_AXI]

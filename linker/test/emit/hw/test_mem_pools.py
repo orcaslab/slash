@@ -189,3 +189,14 @@ def test_pool_shape_read_from_shell_bd(tmp_path):
     p = shell_pool(bd, "MEM_SLR1")
     assert p.num_ports == 2 and p.port_pcs(1) == [1, 9, 17, 25]
     assert p.apertures_tcl(0) == "{0x4000000000 1G} {0x4200000000 1G} {0x4400000000 1G} {0x4600000000 1G}"
+
+
+def test_pool_real_shell_bd():
+    """asl9's slash_base.bd, if present: 4 units x 8 PCs, 1500 MB/s, driver."""
+    from slashkit.core.mem_pools import shell_pool
+    bd = Path("/home/blaise/dev/fame5_work/slash_shell_1113/install.prj.asl9/slash.srcs/sources_1/bd/slash_base/slash_base.bd")
+    if not bd.is_file():
+        pytest.skip("no asl9 build")
+    p = shell_pool(bd, "MEM_SLR0")
+    assert (p.num_ports, p.pcs_per_port, p.bw_mbps, p.ini_strategy) == (4, 8, 1500, "driver")
+    assert p.port_pcs(1) == [1, 5, 9, 13, 17, 21, 25, 29]

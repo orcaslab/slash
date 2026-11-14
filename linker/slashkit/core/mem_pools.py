@@ -60,6 +60,7 @@ class MemPool:
     pcs_per_port: int = 32
     windows: Optional[Dict[int, List[Tuple[int, int]]]] = None  # from the installed shell's BD
     ini_strategy: str = "driver"  # INI strategy of the units' boundary ports (from the shell's BD)
+    bw_mbps: Optional[int] = None  # booking of each unit (MB/s, read and write), from the shell's BD
 
     def port_pcs(self, index: int) -> List[int]:
         """HBM pseudo-channels (0..31) the unit serves."""
@@ -178,14 +179,38 @@ def shell_pool(base_bd: Optional[Path], name: str) -> Optional[MemPool]:
         return None
     pcs = {len(wins[p.ini_port(i)]) for i in range(n)}
     per = 32 if wins[p.ini_port(0)] and wins[p.ini_port(0)][0][1] >= (32 << 30) else max(pcs)
-    strat = "driver"
+    strat, bw = "driver", None
     try:
-        ports = json.loads(Path(base_bd).read_text()).get("design", {}).get("interface_ports", {})
+        doc = json.loads(Path(base_bd).read_text())
+        ports = doc.get("design", {}).get("interface_ports", {})
         strat = ports.get(p.ini_port(0), {}).get("parameters", {}).get("INI_STRATEGY", {}).get("value", "driver")
+        cell = _find_key(doc, p.noc_cell(0))
+        conn = (cell or {}).get("interface_ports", {}).get("S00_AXI", {}).get("parameters", {}) \
+            .get("CONNECTIONS", {}).get("value", "")
+        m = re.search(r"read_bw \{(\d+)\}", conn)
+        bw = int(m.group(1)) if m else None
     except (ValueError, OSError, AttributeError):
         pass
     return replace(p, num_ports=n, pcs_per_port=per, windows={i: wins[p.ini_port(i)] for i in range(n)},
-                   ini_strategy=strat)
+                   ini_strategy=strat, bw_mbps=bw)
+
+
+def _find_key(obj, key):
+    """First dict value stored under `key` anywhere in a BD JSON (cells are nested by hierarchy)."""
+    if isinstance(obj, dict):
+        v = obj.get(key)
+        if isinstance(v, dict) and "vlnv" in v:
+            return v
+        for x in obj.values():
+            r = _find_key(x, key)
+            if r is not None:
+                return r
+    elif isinstance(obj, list):
+        for x in obj:
+            r = _find_key(x, key)
+            if r is not None:
+                return r
+    return None
 
 
 def shell_has_pool(base_bd: Optional[Path], pool: str) -> bool:

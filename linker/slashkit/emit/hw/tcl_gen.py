@@ -146,7 +146,8 @@ def build_mem_pools_context(instances: dict, shell_type: ShellType, base_bd=None
         if pool.shell_feature:
             ctx["mem_pool_nocs"] += [
                 {"name": pool.noc_cell(i), "port": pool.ini_port(i),
-                 "apertures": pool.apertures_tcl(i), "strategy": pool.ini_strategy}
+                 "apertures": pool.apertures_tcl(i), "strategy": pool.ini_strategy,
+                 "bw": pool.bw_mbps or POOL_BW_MBPS}
                 for i in range(pool.num_ports)
             ]
     return ctx
