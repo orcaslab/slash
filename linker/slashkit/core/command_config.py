@@ -510,11 +510,19 @@ class InstallerConfiguration(CommandConfiguration):
             default="service",
             help="Hardware shell variant to build and install (compute or service). Default: service",
         )
+        ap.add_argument(
+            "--no-any-slr-hbm",
+            action="store_true",
+            help="Compute shell only: build without the per-SLR HBM ingress ports (MEM_SLR0/MEM_SLR1) "
+            "and keep the shipped direct-HBM bookings (the classic compute shell).",
+        )
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)
 
         self._ignore_timing_failure: bool = args.ignore_timing_failure
+        if getattr(args, "no_any_slr_hbm", False):
+            os.environ["SLASH_ANY_SLR_HBM"] = "0"
 
         self._build_dir: Path = args.build_dir.expanduser().resolve()
         if self._build_dir.is_dir():

@@ -57,6 +57,11 @@ if {![info exists ::asl_ports]} {
     {1 6 NOC_NMU512_X3Y8} {1 7 NOC_NMU512_X3Y10}
   }
 }
+# Build-time variant switch: SLASH_ANY_SLR_HBM=0 in the environment of `slashkit install`
+# (or --no-any-slr-hbm) builds the classic compute shell: no per-SLR ports, shipped bookings.
+if {[info exists ::env(SLASH_ANY_SLR_HBM)] && $::env(SLASH_ANY_SLR_HBM) eq "0"} {
+  set ::asl_ports {}
+}
 # Ports kept per SLR (the first N of each SLR's rows above).
 if {![info exists ::asl_per_slr]} {
   set ::asl_per_slr 8
