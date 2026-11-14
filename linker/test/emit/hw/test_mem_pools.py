@@ -134,7 +134,7 @@ def test_pools_round_robin_and_cells(tmp_path, monkeypatch):
             pcs = [i, i + 8, i + 16, i + 24]
             ap = " ".join("{0x%X 1G}" % (0x4000000000 + q * 0x40000000) for q in pcs)
             assert f"set_property APERTURES {{{ap}}} [get_bd_intf_ports {p}]" in t
-    assert "read_bw {2000} write_bw {2000}" in t
+    assert "read_bw {1500} write_bw {1500}" in t
 
 
 def test_old_shell_unchanged(tmp_path, monkeypatch):
