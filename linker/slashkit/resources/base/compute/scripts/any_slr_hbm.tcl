@@ -57,6 +57,10 @@ if {![info exists ::asl_ports]} {
     {1 6 NOC_NMU512_X3Y8} {1 7 NOC_NMU512_X3Y10}
   }
 }
+# Build-time overrides (for exploring variants without editing this file).
+foreach {var envn} {asl_bw SLASH_ASL_BW asl_per_slr SLASH_ASL_PER_SLR asl_pcs_per_port SLASH_ASL_PCS asl_direct_bw SLASH_ASL_DIRECT_BW} {
+  if {[info exists ::env($envn)]} { set ::$var $::env($envn) }
+}
 # Build-time variant switch: SLASH_ANY_SLR_HBM=0 in the environment of `slashkit install`
 # (or --no-any-slr-hbm) builds the classic compute shell: no per-SLR ports, shipped bookings.
 if {[info exists ::env(SLASH_ANY_SLR_HBM)] && $::env(SLASH_ANY_SLR_HBM) eq "0"} {
