@@ -66,9 +66,11 @@ foreach {var envn} {asl_bw SLASH_ASL_BW asl_per_slr SLASH_ASL_PER_SLR asl_pcs_pe
 if {[info exists ::env(SLASH_ANY_SLR_HBM)] && $::env(SLASH_ANY_SLR_HBM) eq "0"} {
   set ::asl_ports {}
 }
-# Ports kept per SLR (the first N of each SLR's rows above).
+# Ports kept per SLR (the first N of each SLR's rows above). 4: the implementation's NoC solve (with
+# the DFX partition applied) relaxes with 8 RM-owned units per SLR at 1,000-2,000 MB/s, while the
+# BD-level solve passes; 4 units x 8 PCs at 1,500 MB/s solve completely in implementation (asl9).
 if {![info exists ::asl_per_slr]} {
-  set ::asl_per_slr 8
+  set ::asl_per_slr 4
 }
 if {$::asl_per_slr < 8} {
   set keep {}
@@ -78,14 +80,14 @@ if {$::asl_per_slr < 8} {
 # Bandwidth reserved per new port (MB/s, each direction). The static side spreads it evenly over
 # the 32 pseudo-channels.
 if {![info exists ::asl_bw]} {
-  set ::asl_bw 2000
+  set ::asl_bw 1500
 }
 # Pseudo-channels per new port. 32 = every port sees the whole 32 GB (16 x 32 = 512 extra NoC
 # paths: the NoC compiler times out and relaxes the whole solution, even at 500 MB/s per port).
 # 4 = port k of an SLR serves PCs {k, k+8, k+16, k+24}; the 8 ports of an SLR cover all 32 PCs once
 # (64 extra paths).
 if {![info exists ::asl_pcs_per_port]} {
-  set ::asl_pcs_per_port 4
+  set ::asl_pcs_per_port 8
 }
 # Booking of each of the 64 direct HBM_AXI ports (MB/s, each direction). The shipped shell books
 # 12,800 (the port's full rate), which leaves each HBM NSU port almost no room for any other path.
