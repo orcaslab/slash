@@ -58,7 +58,7 @@ if {![info exists ::asl_ports]} {
   }
 }
 # Build-time overrides (for exploring variants without editing this file).
-foreach {var envn} {asl_bw SLASH_ASL_BW asl_per_slr SLASH_ASL_PER_SLR asl_pcs_per_port SLASH_ASL_PCS asl_direct_bw SLASH_ASL_DIRECT_BW} {
+foreach {var envn} {asl_bw SLASH_ASL_BW asl_per_slr SLASH_ASL_PER_SLR asl_pcs_per_port SLASH_ASL_PCS asl_direct_bw SLASH_ASL_DIRECT_BW asl_ini_strategy SLASH_ASL_STRATEGY} {
   if {[info exists ::env($envn)]} { set ::$var $::env($envn) }
 }
 # Build-time variant switch: SLASH_ANY_SLR_HBM=0 in the environment of `slashkit install`
@@ -93,6 +93,11 @@ if {![info exists ::asl_pcs_per_port]} {
 # Empty = keep the shipped 12,800.
 if {![info exists ::asl_direct_bw]} {
   set ::asl_direct_bw 2000
+}
+# INI strategy of the new boundary paths: "driver" = owned by the RM (as MEM/DDR are), "load" =
+# owned by the static region: the static implementation routes and locks them, and every RM keeps them.
+if {![info exists ::asl_ini_strategy]} {
+  set ::asl_ini_strategy driver
 }
 # First axi_noc_cips NoC slave input used for the new ports (the shipped shell uses S00..S20).
 set ::asl_nsi_base 21
@@ -151,7 +156,7 @@ proc asl_rp {} {
     set tg [asl_tg $slr $idx]
 
     set port [create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 $pt]
-    set_property CONFIG.INI_STRATEGY {driver} $port
+    set_property CONFIG.INI_STRATEGY $::asl_ini_strategy $port
     if {$::asl_pcs_per_port < 32} {
       set ap {}
       foreach p [asl_port_pcs $idx] { lappend ap [list [format "0x%X" [expr {0x4000000000 + $p * 0x40000000}]] 1G] }
@@ -163,7 +168,7 @@ proc asl_rp {} {
 
     set noc [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 $nm]
     set_property -dict [list CONFIG.NSI_NAMES {} CONFIG.NUM_MI {0} CONFIG.NUM_NMI {1} CONFIG.NUM_NSI {0}] $noc
-    set_property CONFIG.INI_STRATEGY {driver} [get_bd_intf_pins /$nm/M00_INI]
+    set_property CONFIG.INI_STRATEGY $::asl_ini_strategy [get_bd_intf_pins /$nm/M00_INI]
     set_property -dict [list \
       CONFIG.PHYSICAL_LOC $site \
       CONFIG.CONNECTIONS "M00_INI {read_bw {$::asl_bw} write_bw {$::asl_bw}}" \

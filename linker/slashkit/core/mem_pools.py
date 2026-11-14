@@ -59,6 +59,7 @@ class MemPool:
     shell_feature: bool  # True if only any-SLR HBM shells have it
     pcs_per_port: int = 32
     windows: Optional[Dict[int, List[Tuple[int, int]]]] = None  # from the installed shell's BD
+    ini_strategy: str = "driver"  # INI strategy of the units' boundary ports (from the shell's BD)
 
     def port_pcs(self, index: int) -> List[int]:
         """HBM pseudo-channels (0..31) the unit serves."""
@@ -177,7 +178,14 @@ def shell_pool(base_bd: Optional[Path], name: str) -> Optional[MemPool]:
         return None
     pcs = {len(wins[p.ini_port(i)]) for i in range(n)}
     per = 32 if wins[p.ini_port(0)] and wins[p.ini_port(0)][0][1] >= (32 << 30) else max(pcs)
-    return replace(p, num_ports=n, pcs_per_port=per, windows={i: wins[p.ini_port(i)] for i in range(n)})
+    strat = "driver"
+    try:
+        ports = json.loads(Path(base_bd).read_text()).get("design", {}).get("interface_ports", {})
+        strat = ports.get(p.ini_port(0), {}).get("parameters", {}).get("INI_STRATEGY", {}).get("value", "driver")
+    except (ValueError, OSError, AttributeError):
+        pass
+    return replace(p, num_ports=n, pcs_per_port=per, windows={i: wins[p.ini_port(i)] for i in range(n)},
+                   ini_strategy=strat)
 
 
 def shell_has_pool(base_bd: Optional[Path], pool: str) -> bool:

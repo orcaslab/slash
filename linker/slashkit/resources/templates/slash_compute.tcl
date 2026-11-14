@@ -591,7 +591,7 @@ update_compile_order -fileset sources_1
     CONFIG.NUM_NSI {0} \
   ] ${{ n.name }}
   set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {{ "{" ~ n.strategy ~ "}" }} \
  ] [get_bd_intf_pins /{{ n.name }}/M00_INI]
   set_property -dict [ list \
    CONFIG.CONNECTIONS {M00_INI {read_bw {{ "{" ~ mem_pool_bw ~ "}" }} write_bw {{ "{" ~ mem_pool_bw ~ "}" }}}} \
