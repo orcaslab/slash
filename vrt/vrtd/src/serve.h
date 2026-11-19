@@ -41,6 +41,7 @@
 #define VRTD_SERVE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <vrtd/wire.h>
@@ -49,6 +50,36 @@
 #include "array.h"
 
 struct device;
+
+/**
+ * @brief The steps of a design write that act on the card itself.
+ *
+ * vrtd uses @ref design_write_hw_card.  Unit tests replace these steps to run
+ * the design-write request code against a mock device; the transfer itself
+ * goes through the device's design writer, which runs on the mock QDMA there.
+ */
+struct design_write_hw {
+    /**
+     * @brief Tell whether the card's management controller allows programming.
+     * @param d         The device.
+     * @param state     Receives a description of the controller state.
+     * @param state_len Size of @p state.
+     */
+    bool (*amc_ready)(const struct device *d, char *state, size_t state_len);
+    /**
+     * @brief Bring the user clock to its safe rate.
+     * @return 0 on success, -1 on failure.
+     */
+    int (*park_user_clock)(struct device *d);
+    /**
+     * @brief Re-enumerate PF2 after a transfer and reopen its handles.
+     * @return VRTD_RET_OK on success, another VRTD_RET_* code on failure.
+     */
+    uint16_t (*refresh_pf2)(struct device *d);
+};
+
+/** @brief The design-write steps that act on a real V80. */
+extern const struct design_write_hw design_write_hw_card;
 
 /**
  * @brief Per-client connection state for the vrtd daemon.

@@ -724,6 +724,19 @@ enum vrtd_ret vrtd_get_design_info(int fd, uint32_t dev, struct vrtd_design_info
     return VRTD_RET_OK;
 }
 
+enum vrtd_ret vrtd_forget_design(int fd, uint32_t dev)
+{
+    struct vrtd_req_forget_design req = {
+        .dev_number = dev,
+    };
+    struct vrtd_resp_forget_design resp = {0};
+
+    return vrtd_raw_request(fd, VRTD_REQ_FORGET_DESIGN,
+                            &req, sizeof(req),
+                            &resp, sizeof(resp),
+                            NULL, NULL);
+}
+
 enum vrtd_ret vrtd_design_write(
     int fd,
     uint32_t dev,
@@ -731,11 +744,14 @@ enum vrtd_ret vrtd_design_write(
     uint8_t required_shell,
     const uint8_t *uuid,
     uint8_t flags,
-    bool *skipped_out
+    struct vrtd_design_write_result *result_out
 )
 {
-    if (skipped_out != NULL) {
-        *skipped_out = false;
+    if (result_out != NULL) {
+        *result_out = (struct vrtd_design_write_result) {
+            .skipped = false,
+            .num_holders = 0,
+        };
     }
 
     if (input_fd < 0) {
@@ -760,8 +776,11 @@ enum vrtd_ret vrtd_design_write(
         return ret;
     }
 
-    if (skipped_out != NULL) {
-        *skipped_out = resp.skipped != 0;
+    if (result_out != NULL) {
+        *result_out = (struct vrtd_design_write_result) {
+            .skipped = resp.skipped != 0,
+            .num_holders = resp.num_holders,
+        };
     }
 
     return VRTD_RET_OK;
@@ -774,11 +793,14 @@ enum vrtd_ret vrtd_design_write_file(
     uint8_t required_shell,
     const uint8_t *uuid,
     uint8_t flags,
-    bool *skipped_out
+    struct vrtd_design_write_result *result_out
 )
 {
-    if (skipped_out != NULL) {
-        *skipped_out = false;
+    if (result_out != NULL) {
+        *result_out = (struct vrtd_design_write_result) {
+            .skipped = false,
+            .num_holders = 0,
+        };
     }
 
     if (path == NULL) {
@@ -791,7 +813,7 @@ enum vrtd_ret vrtd_design_write_file(
     }
 
     enum vrtd_ret ret = vrtd_design_write(fd, dev, input_fd, required_shell,
-                                          uuid, flags, skipped_out);
+                                          uuid, flags, result_out);
     (void) close(input_fd);
     return ret;
 }

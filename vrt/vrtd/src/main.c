@@ -68,7 +68,9 @@ void globals_destroy();
 
 int main(void)
 {
-    struct vrtd state = {0};
+    struct vrtd state = {
+        .design_write_hw = &design_write_hw_card,
+    };
 
     /*
      * Verify the systemd journal is reachable before doing anything else.

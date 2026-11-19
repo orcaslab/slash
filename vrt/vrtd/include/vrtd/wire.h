@@ -127,6 +127,9 @@ enum vrtd_opcode {
 
     /** Query the UUID of the design loaded on a device and how many clients hold it. */
     VRTD_REQ_GET_DESIGN_INFO,
+
+    /** Make vrtd forget the design loaded on a device (an image was loaded outside vrtd). */
+    VRTD_REQ_FORGET_DESIGN,
 };
 
 /**
@@ -440,12 +443,25 @@ enum vrtd_design_write_flags {
  * needs another shell.  The client whose request wrote the design, and every
  * client whose request was skipped, holds a reference on the design until it
  * disconnects.  A request that would replace a design another client holds
- * fails with VRTD_RET_BUSY.  When the last holder disconnects the daemon parks
- * the user clock; the design stays loaded.
+ * fails with VRTD_RET_BUSY, and so does a request that arrives while another
+ * client's write is in flight, even of the same design: the daemon does not
+ * queue it.  When the last holder disconnects the daemon parks the user clock;
+ * the design stays loaded.
+ *
+ * A skipped request leaves the design as its holders left it: kernels keep
+ * their state and the clock keeps its rate.  The response says how many
+ * connections hold the design, so a client knows whether it is the only user
+ * (and may set the clock) or shares a running design (and must leave it).
+ *
+ * The UUID is recorded once the transfer and the PF2 refresh completed; the
+ * daemon does not check that the card applied the PDI.
  *
  * A design made of several PDIs is written with one request per PDI, all with
  * the same UUID and all but the last with VRTD_DESIGN_WRITE_MORE.  Only the
  * first request can be skipped; the client then skips the rest.
+ *
+ * The daemon rejects a request shorter than this struct with
+ * VRTD_RET_BAD_REQUEST: daemon and clients must be upgraded together.
  */
 struct vrtd_req_design_write {
     uint32_t dev_number; ///< Device index (0-based).
@@ -456,6 +472,23 @@ struct vrtd_req_design_write {
 
 struct vrtd_resp_design_write {
     uint8_t skipped; ///< Non-zero if the design was already loaded and nothing was written.
+    uint32_t num_holders; ///< Connections that hold the design now, the requester included.
+} __attribute__((packed));
+
+/**
+ * @brief Request that the daemon forget the design loaded on a device.
+ *
+ * For a client that changed the fabric without a design write, for example
+ * by loading an image over JTAG.  The loaded UUID becomes unknown, so the
+ * next design write is not skipped; a write in flight records nothing.
+ * Holders keep their references.  Requires the design-write permission.
+ */
+struct vrtd_req_forget_design {
+    uint32_t dev_number; ///< Device index (0-based).
+} __attribute__((packed));
+
+struct vrtd_resp_forget_design {
+    uint8_t zero; ///< Placeholder to avoid empty-struct ABI issues.
 } __attribute__((packed));
 
 /**

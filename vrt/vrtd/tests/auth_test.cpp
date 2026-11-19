@@ -162,6 +162,18 @@ TEST_F(AuthTest, GetDesignInfoDeniedWithoutQuery) {
     EXPECT_EQ(auth_request_get_design_info(&cl, &req), 0);
 }
 
+TEST_F(AuthTest, ForgetDesignNeedsDesignWritePermission) {
+    assignRole(fullaccess_role);
+    struct vrtd_req_forget_design req{};
+    req.dev_number = 0;
+    EXPECT_EQ(auth_request_forget_design(&cl, &req), 1);
+
+    cleanup_role(cl.role);
+    cl.role = nullptr;
+    assignRole(info_role);
+    EXPECT_EQ(auth_request_forget_design(&cl, &req), 0);
+}
+
 TEST_F(AuthTest, GetDeviceByBdfAllowed) {
     assignRole(info_role);
     struct vrtd_req_get_device_by_bdf req{};

@@ -332,8 +332,15 @@ static uint16_t client_handle_request_get_design_info(
     struct vrtd_resp_get_design_info *resp_body,
     uint16_t *resp_size
 );
+static uint16_t client_handle_request_forget_design(
+    struct client *client,
+    const struct vrtd_req_forget_design *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_forget_design *resp_body,
+    uint16_t *resp_size
+);
 
-static uint16_t device_refresh_pf2_after_design_write(struct device *d);
+static uint16_t card_refresh_pf2(struct device *d);
 static void release_designs_for_conn_id(struct vrtd *state, uint64_t conn_id);
 static void cleanup_buffers_for_conn_id(struct vrtd *state, uint64_t conn_id);
 static void cleanup_client_device_state(struct client *client);
@@ -373,6 +380,7 @@ static const char *vrtd_opcode_to_string(uint16_t opcode)
     case VRTD_REQ_BUFFER_OPEN_RAW:   return "BUFFER_OPEN_RAW";
     case VRTD_REQ_SET_SHELL_STATE:   return "SET_SHELL_STATE";
     case VRTD_REQ_GET_DESIGN_INFO:   return "GET_DESIGN_INFO";
+    case VRTD_REQ_FORGET_DESIGN:     return "FORGET_DESIGN";
     default:                         return "UNKNOWN";
     }
 }
@@ -435,7 +443,7 @@ static const struct client *client_find_by_conn_id(const struct vrtd *state, uin
  * @param d  The device whose PF2 should be refreshed.
  * @return   VRTD_RET_OK on success, or an appropriate VRTD_RET_* error code.
  */
-static uint16_t device_refresh_pf2_after_design_write(struct device *d)
+static uint16_t card_refresh_pf2(struct device *d)
 {
     char pf2_bdf[VRTD_PCI_BDF_LEN] = {0};
     if (pci_bdf_set_function(d->pci_info.bdf, 2, pf2_bdf) != 0) {
@@ -603,11 +611,9 @@ static void release_designs_for_conn_id(struct vrtd *state, uint64_t conn_id)
         if (d->design_writer != NULL && design_writer_is_busy(d->design_writer)) {
             continue;
         }
-        if (d->clock_driver != NULL) {
-            LOG(LOG_INFO, "Client conn_id=%llu was the last to use the design on %s; parking its clock",
-                (unsigned long long)conn_id, d->pci_info.bdf);
-            (void) clock_driver_park_user_region(d->clock_driver);
-        }
+        LOG(LOG_INFO, "Client conn_id=%llu was the last to use the design on %s; parking its clock",
+            (unsigned long long)conn_id, d->pci_info.bdf);
+        (void) state->design_write_hw->park_user_clock(d);
     }
 }
 
@@ -686,7 +692,7 @@ static void drain_deferred_conn_cleanups(struct vrtd *state)
  * cold power cycle. Only states in which the AMI driver itself still allows
  * device programming pass.
  */
-static bool design_write_amc_ready(const struct device *d, char *state, size_t state_len)
+static bool card_amc_ready(const struct device *d, char *state, size_t state_len)
 {
     char pf0_bdf[VRTD_PCI_BDF_LEN] = {0};
     if (pci_bdf_set_function(d->pci_info.bdf, 0, pf0_bdf) != 0) {
@@ -710,12 +716,27 @@ static bool design_write_amc_ready(const struct device *d, char *state, size_t s
     return strcmp(buf, AMI_DEV_READY_STR) == 0 || strcmp(buf, "MISSING_INFO") == 0;
 }
 
+static int card_park_user_clock(struct device *d)
+{
+    if (d->clock_driver == NULL) {
+        return -1;
+    }
+
+    return clock_driver_park_user_region(d->clock_driver);
+}
+
+const struct design_write_hw design_write_hw_card = {
+    .amc_ready = card_amc_ready,
+    .park_user_clock = card_park_user_clock,
+    .refresh_pf2 = card_refresh_pf2,
+};
+
 /*
  * Replace a design only from a safe state: card healthy, previous design
  * clocked below every image's timed rate. The client sets the new design's
  * own rate once the write has completed.
  */
-static uint16_t design_write_prepare(struct device *d)
+static uint16_t design_write_prepare(const struct design_write_hw *hw, struct device *d)
 {
     if (d->needs_reset) {
         LOG(LOG_ERR, "design_write: refusing %s: a previous design write failed; "
@@ -724,13 +745,13 @@ static uint16_t design_write_prepare(struct device *d)
     }
 
     char state[AMI_DEV_STATE_SIZE + 48] = {0};
-    if (!design_write_amc_ready(d, state, sizeof(state))) {
+    if (!hw->amc_ready(d, state, sizeof(state))) {
         LOG(LOG_ERR, "design_write: refusing %s: AMC state is %s; "
             "the card must be reset before it can be programmed", d->pci_info.bdf, state);
         return VRTD_RET_DEVICE_UNHEALTHY;
     }
 
-    if (d->clock_driver == NULL || clock_driver_park_user_region(d->clock_driver) != 0) {
+    if (hw->park_user_clock(d) != 0) {
         LOG(LOG_ERR, "design_write: refusing %s: cannot park the user clock", d->pci_info.bdf);
         return VRTD_RET_DEVICE_UNHEALTHY;
     }
@@ -1501,6 +1522,16 @@ static int client_handle_request(struct client *client)
                 &size
             );
         break;
+    case VRTD_REQ_FORGET_DESIGN:
+        resp_header->ret =
+            client_handle_request_forget_design(
+                client,
+                CLIENT_IN_BODY(*client, vrtd_req_forget_design),
+                req_header->size,
+                CLIENT_OUT_BODY(*client, vrtd_resp_forget_design),
+                &size
+            );
+        break;
 
     default:
         LOG(LOG_WARNING, "Unknown opcode=%u from uid=%u conn_id=%llu",
@@ -1608,22 +1639,29 @@ static int client_finalize_pending_design_write(struct client *client)
 
     uint16_t design_write_ret = VRTD_RET_OK;
     if (transfer_error == 0) {
-        design_write_ret = device_refresh_pf2_after_design_write(d);
+        design_write_ret = client->state->design_write_hw->refresh_pf2(d);
         /*
          * The loaded UUID was forgotten when the write was accepted.  It is
          * recorded again only for a request that succeeded as a whole; if the
          * PF2 refresh failed the design stays unknown and is written again.
+         * vrtd does not check that the card applied the PDI.
          */
         if (design_write_ret == VRTD_RET_OK) {
             design_state_write_completed(
                 &d->design, req_body->uuid,
                 (req_body->flags & VRTD_DESIGN_WRITE_MORE) != 0
             );
+            char uuid_str[DESIGN_UUID_STR_LEN];
+            design_uuid_to_string(d->design.uuid, uuid_str);
+            LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu (loaded design %s)",
+                (unsigned int)client->uid, (unsigned long long)client->conn_id, uuid_str);
+        } else {
+            design_state_write_unconfirmed(&d->design);
+            LOG(LOG_WARNING, "Design write transferred but PF2 refresh failed (ret=%u) for uid=%u conn_id=%llu; "
+                "the loaded design is unknown",
+                (unsigned int)design_write_ret,
+                (unsigned int)client->uid, (unsigned long long)client->conn_id);
         }
-        char uuid_str[DESIGN_UUID_STR_LEN];
-        design_uuid_to_string(d->design.uuid, uuid_str);
-        LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu (loaded design %s)",
-            (unsigned int)client->uid, (unsigned long long)client->conn_id, uuid_str);
     } else {
         LOG(LOG_WARNING, "Design write failed (error=%d) for uid=%u conn_id=%llu",
             transfer_error, (unsigned int)client->uid, (unsigned long long)client->conn_id);
@@ -1642,6 +1680,7 @@ static int client_finalize_pending_design_write(struct client *client)
 
     if (design_write_ret == VRTD_RET_OK) {
         resp_body->skipped = 0;
+        resp_body->num_holders = (uint32_t)d->design.holders.len;
         resp_header->size = sizeof(*resp_body);
     } else {
         resp_header->size = 0;
@@ -1936,7 +1975,8 @@ static uint16_t client_handle_request_get_num_devices(
  *   Request body:  vrtd_req_design_write { uint32_t dev_number,
  *                                          uint8_t required_shell,
  *                                          uint8_t flags, uint8_t uuid[16] }
- *   Response body: vrtd_resp_design_write { uint8_t skipped } (deferred
+ *   Response body: vrtd_resp_design_write { uint8_t skipped,
+ *                                           uint32_t num_holders } (deferred
  *                                          unless skipped)
  *
  * @return VRTD_RET_OK if the write was successfully submitted or skipped,
@@ -2043,6 +2083,7 @@ static uint16_t client_handle_request_design_write(
             d->design.holders.len);
 
         resp_body->skipped = 1;
+        resp_body->num_holders = (uint32_t)d->design.holders.len;
         *resp_size = sizeof(*resp_body);
         return VRTD_RET_OK;
     }
@@ -2085,7 +2126,7 @@ static uint16_t client_handle_request_design_write(
         }
     }
 
-    uint16_t prepare_ret = design_write_prepare(d);
+    uint16_t prepare_ret = design_write_prepare(client->state->design_write_hw, d);
     if (prepare_ret != VRTD_RET_OK) {
         return prepare_ret;
     }
@@ -2180,6 +2221,14 @@ static uint16_t client_handle_request_set_shell_state(
         return VRTD_RET_INVALID_ARGUMENT;
     }
 
+    /*
+     * The caller reports an image that was loaded outside vrtd (over JTAG, or
+     * booted before the daemon knew the shell): whatever design vrtd wrote
+     * before is not what the fabric holds now.  That holds even when the
+     * report itself is refused below.
+     */
+    design_state_forget(&d->design);
+
     if (d->current_shell != VRTD_SHELL_UNKNOWN && d->current_shell != shell_type) {
         LOG(LOG_NOTICE,
             "set_shell_state: refusing to change known shell state dev=%u current=%u requested=%u",
@@ -2196,12 +2245,6 @@ static uint16_t client_handle_request_set_shell_state(
 
     d->current_shell = shell_type;
     d->jtag = req_body->jtag != 0;
-    /*
-     * The caller reports an image that was loaded outside vrtd (over JTAG, or
-     * booted before the daemon knew the shell): whatever design vrtd wrote
-     * before is not what the fabric holds now.
-     */
-    design_state_forget(&d->design);
 
     memset(resp_body, 0, sizeof(*resp_body));
     *resp_size = sizeof(*resp_body);
@@ -2624,26 +2667,30 @@ static uint16_t client_handle_request_device_hotplug_op(
          * A bus reset or a function going away and coming back leaves the
          * fabric in a state vrtd did not write.  Not every path below drops
          * the device object (toggle_sbr and a single-function hotplug keep
-         * it), so forget the loaded design here, before the first step.
+         * it), so each path forgets the loaded design once its arguments are
+         * valid, right before its first hotplug call.
          */
-        design_state_forget(&d->design);
-
         if (req_body->function == VRTD_DEVICE_HOTPLUG_FUNCTION_ALL) {
             if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR) {
                 LOG(LOG_ERR, "hotplug_op: toggle_sbr requires a specific function number");
                 return VRTD_RET_INVALID_ARGUMENT;
             }
 
-            bool any_removed = false;
+            char pf_bdfs[3][VRTD_PCI_BDF_LEN];
             for (uint8_t func = 0; func < 3; func++) {
-                char pf_bdf[VRTD_PCI_BDF_LEN];
-                if (pci_bdf_set_function(d->pci_info.bdf, func, pf_bdf) != 0) {
+                if (pci_bdf_set_function(d->pci_info.bdf, func, pf_bdfs[func]) != 0) {
                     LOG(LOG_ERR, "hotplug_op: %s: failed to construct PF%u BDF from %s",
                         vrtd_hotplug_op_to_string(req_body->op),
                         (unsigned int)func, d->pci_info.bdf);
                     return VRTD_RET_INTERNAL_ERROR;
                 }
+            }
 
+            design_state_forget(&d->design);
+
+            bool any_removed = false;
+            for (uint8_t func = 0; func < 3; func++) {
+                const char *pf_bdf = pf_bdfs[func];
                 ret = slash_hotplug_remove(g_hotplug, pf_bdf);
                 if (ret != 0 && errno != ENODEV) {
                     int err = errno;
@@ -2698,6 +2745,8 @@ static uint16_t client_handle_request_device_hotplug_op(
                 (unsigned int)req_body->function, d->pci_info.bdf);
             return VRTD_RET_INTERNAL_ERROR;
         }
+
+        design_state_forget(&d->design);
 
         switch (req_body->op) {
         case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
@@ -3737,6 +3786,74 @@ static uint16_t client_handle_request_get_design_info(
     LOG(LOG_DEBUG, "get_design_info: dev=%u uid=%u conn_id=%llu",
         (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+    return VRTD_RET_OK;
+}
+
+/* ---- FORGET_DESIGN ------------------------------------------------------ */
+
+/**
+ * Handles VRTD_REQ_FORGET_DESIGN -- forgets the design loaded on a device.
+ *
+ * For a client that loaded an image without a design write (over JTAG): the
+ * UUID becomes unknown, so the next design write of any vbin is not skipped,
+ * and a write in flight records nothing when it completes.  Holders keep
+ * their references.
+ *
+ * Auth: auth_request_forget_design (the design-write permission).
+ * FD passing: none.
+ *
+ * Wire format:
+ *   Request body:  vrtd_req_forget_design { uint32_t dev_number }
+ *   Response body: vrtd_resp_forget_design { uint8_t zero }
+ *
+ * @return VRTD_RET_OK on success, VRTD_RET_NOEXIST if dev_number is invalid.
+ */
+static uint16_t client_handle_request_forget_design(
+    struct client *client,
+    const struct vrtd_req_forget_design *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_forget_design *resp_body,
+    uint16_t *resp_size
+)
+{
+    *resp_size = 0;
+
+    if (req_size < sizeof(*req_body)) {
+        LOG(LOG_WARNING, "forget_design: malformed request");
+        return VRTD_RET_BAD_REQUEST;
+    }
+
+    int ret = auth_request_forget_design(client, req_body);
+    if (ret == -1) {
+        return VRTD_RET_INTERNAL_ERROR;
+    } else if (ret == 0) {
+        return VRTD_RET_AUTH_ERROR;
+    }
+
+    if (req_body->dev_number >= client->state->devices.len) {
+        LOG(LOG_NOTICE, "forget_design: device %u does not exist", (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    struct device *d = client->state->devices.d[req_body->dev_number];
+    if (d == NULL) {
+        LOG(LOG_NOTICE, "forget_design: device %u is null", (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    char uuid_str[DESIGN_UUID_STR_LEN];
+    design_uuid_to_string(d->design.uuid, uuid_str);
+
+    design_state_forget(&d->design);
+
+    LOG(LOG_INFO, "forget_design: forgot design %s on %s (%zu holder(s)%s) uid=%u conn_id=%llu",
+        uuid_str, d->pci_info.bdf, d->design.holders.len,
+        d->design.writing ? ", write in flight" : "",
+        (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+    memset(resp_body, 0, sizeof(*resp_body));
+    *resp_size = sizeof(*resp_body);
 
     return VRTD_RET_OK;
 }

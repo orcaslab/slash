@@ -48,16 +48,35 @@ keeps the UUID of the loaded design. The all-zero UUID means unknown.
 |-------|-------------|
 | Daemon start | unknown |
 | Device object rebuilt (reset sequence, shell switch, remove + rescan) | unknown |
-| Bus reset or hotplug of a function, cfgmem program, `SET_SHELL_STATE` | unknown |
+| Bus reset or hotplug of a function, cfgmem program | unknown |
+| `SET_SHELL_STATE` (also when the report is refused), `FORGET_DESIGN` | unknown |
 | Design write accepted, transfer not finished | unknown |
-| Design write failed or interrupted | unknown |
+| Design write failed or interrupted, PF2 refresh failed | unknown |
 | Design write completed | UUID of the request (unknown if the request has none) |
+| Design write completed, but a forget arrived while it was in flight | unknown |
+
+"Completed" means the transfer and the PF2 refresh succeeded. vrtd does not
+check that the card applied the PDI. If a design that was written does not
+respond, forget it (`v80-smi forget-design`) or program with
+`VRT_FORCE_PROGRAM=1`.
 
 **Skip.** A request whose UUID is non-null and equal to the loaded UUID is
 answered at once with `skipped` set in the response. Nothing is written, the
 clock is not parked and PF2 is not refreshed. A request is never skipped when
 it carries `VRTD_DESIGN_WRITE_FORCE`, when it needs another shell, or when the
 card needs a reset.
+
+A skipped write leaves the design in whatever state it was left in, as in XRT:
+kernel registers, device memory and the clock are not touched. A client must
+reset its own kernels before it uses them. When a client dies, vrtd frees the
+buffers it opened through vrtd, but not QDMA queue pairs it created directly.
+
+**Clock.** The response carries the number of connections that hold the
+design, the requester included. A client sets the design's clock rate after a
+write that was not skipped, or after a skipped one when it is the only holder
+(vrtd parked the clock when the last holder left). When the write was skipped
+and others hold the design, the client leaves the clock alone: they are
+running at it. libvrt does this.
 
 **References.** The client whose request wrote the design, and every client
 whose request was skipped, holds a reference on the design until its
@@ -67,7 +86,13 @@ clock; the design stays loaded and known.
 **In use.** A request that would replace the design (another UUID, no UUID, or
 `VRTD_DESIGN_WRITE_FORCE`) is refused with `VRTD_RET_BUSY` while a connection
 other than the requester holds a reference. The log names the holder. A client
-that is the only holder may replace its own design.
+that is the only holder may replace its own design. A request that arrives
+while another client's write is in flight gets `VRTD_RET_BUSY` too, even for
+the same design: vrtd does not queue it, and libvrt does not retry.
+
+The rule guards design writes only. Reset, cfgmem and hotplug requests are
+administrative: they are not refused because a design is held. A reset
+rebuilds the device object, and the new object has no holders.
 
 **Several PDIs.** A vbin with several PDIs is one design. The client sends one
 request per PDI with the same UUID and sets `VRTD_DESIGN_WRITE_MORE` on all
@@ -78,9 +103,16 @@ rest.
 **Query.** `VRTD_REQ_GET_DESIGN_INFO` returns the loaded UUID and the number of
 holders. `v80-smi list` shows both.
 
-vrtd cannot see a design that was loaded behind its back (for example over
-JTAG while the daemon keeps running). After such a load, report it with
-`SET_SHELL_STATE`, restart the daemon, or force the next write.
+**Forget.** `VRTD_REQ_FORGET_DESIGN` makes vrtd forget the loaded design of a
+device (`v80-smi forget-design -d BDF`); holders keep their references. It
+needs the design-write permission. vrtd cannot see a design loaded behind its
+back, so every tool that loads an image without vrtd must send it:
+`v80-smi write-static-shell --jtag` does. A forget that arrives while a write
+is in flight makes that write record nothing.
+
+**Upgrades.** The design-write request grew with the UUID and the flags.
+vrtd rejects a shorter request with `VRTD_RET_BAD_REQUEST`, so the daemon and
+its clients (libvrtd, libvrtdpp, libvrt, v80-smi) must be upgraded together.
 
 The rules live in `src/design_state.c`, which does no I/O and is covered by
 `tests/design_state_test.cpp`. `src/serve.c` applies them.

@@ -200,10 +200,11 @@ showing the C and C++ entry points side-by-side.
 7) Program a Design
 -------------------
 
-- **C**: ``vrtd_design_write_file(fd, dev, "design.pdi", shell, uuid, flags, &skipped)``
-  or ``vrtd_design_write()`` with an open file descriptor.
+- **C**: ``vrtd_design_write_file(fd, dev, "design.pdi", shell, uuid, flags, &result)``
+  or ``vrtd_design_write()`` with an open file descriptor. ``result`` is a
+  ``struct vrtd_design_write_result`` (``skipped``, ``num_holders``).
 
-- **C++**: ``bool skipped = d.designWriteFile("design.pdi", shell, uuid, flags);``
+- **C++**: ``vrtd::DesignWriteResult r = d.designWriteFile("design.pdi", shell, uuid, flags);``
 
 ``uuid`` is the 16-byte UUID the linker stamped into the vbin (``<UUID>`` in
 ``system_map.xml``); pass a null UUID if the design has none. vrtd remembers
@@ -211,11 +212,17 @@ the UUID of the design it wrote last on each device:
 
 - If the device already holds the design, nothing is written and ``skipped``
   is true. ``VRTD_DESIGN_WRITE_FORCE`` (C++: ``vrtd::DesignWriteForce``) writes
-  it anyway.
+  it anyway. A skipped write leaves kernels and device memory as they were:
+  reset your kernels before using them.
 - The connection that wrote the design, and every connection whose write was
   skipped, holds a reference on it until it closes. While another connection
   holds a reference, a write that would replace the design fails with
-  ``VRTD_RET_BUSY``.
+  ``VRTD_RET_BUSY``. So does any write while another connection's write is in
+  flight, even of the same design.
+- ``num_holders`` counts the connections that hold the design, this one
+  included. Set the clock after a write that was not skipped, or after a
+  skipped one with ``num_holders == 1``; otherwise other clients run the
+  design at its clock, so leave it alone.
 - A design made of several PDIs is written with one call per PDI, all with the
   same UUID and all but the last with ``VRTD_DESIGN_WRITE_MORE`` (C++:
   ``vrtd::DesignWriteMore``). If the first call is skipped, skip the others.
@@ -223,7 +230,12 @@ the UUID of the design it wrote last on each device:
 ``vrtd_get_design_info(fd, dev, &info)`` (C++: ``d.getDesignInfo()``) returns
 the UUID of the loaded design and the number of connections that hold it. The
 UUID is all-zero when vrtd does not know what the device holds: after a daemon
-start, a reset, a failed write, or a write of a design without a UUID.
+start, a reset, a failed write, a forget, or a write of a design without a UUID.
+
+vrtd records a design once the transfer and the PF2 refresh completed; it does
+not check that the card applied it. After loading an image without vrtd (over
+JTAG), or when a written design does not respond, call
+``vrtd_forget_design(fd, dev)`` (C++: ``d.forgetDesign()``).
 
 Error Model
 ===========

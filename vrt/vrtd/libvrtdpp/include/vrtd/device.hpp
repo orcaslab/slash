@@ -79,6 +79,14 @@ bool isNull(const DesignUuid& uuid) noexcept;
 std::string toString(const DesignUuid& uuid);
 
 /**
+ * @brief Outcome of a successful design write.
+ */
+struct DesignWriteResult {
+    bool skipped = false;    ///< The device already held the design; nothing was written.
+    uint32_t numHolders = 0; ///< Connections that hold the design now, this session included.
+};
+
+/**
  * @brief The design loaded on a device, returned by Device::getDesignInfo().
  */
 struct DesignInfo {
@@ -322,6 +330,17 @@ public:
     DesignInfo getDesignInfo() const;
 
     /**
+     * @brief Make vrtd forget the design loaded on this device.
+     *
+     * Call it after loading an image without a design write (over JTAG).
+     * The next design write is then not skipped.  Requires the design-write
+     * permission.
+     *
+     * @throws vrtd::Error on error.
+     */
+    void forgetDesign() const;
+
+    /**
      * @brief Perform a design writer transfer using an input file descriptor.
      *
      * The daemon takes ownership of the FD and blocks until the transfer completes.
@@ -330,11 +349,22 @@ public:
      * non-null and equal to the UUID of the loaded design, nothing is written,
      * unless @p flags contains DesignWriteForce.  Either way the session then
      * holds a reference on the design until it is closed; while it does, no
-     * other client can replace the design.
+     * other client can replace the design with a design write.  A write that
+     * arrives while another client's write is in flight fails with
+     * VRTD_RET_BUSY, even for the same design.
      *
-     * vrtd parks the user clock before a write and when the last holder of a
-     * design disconnects, so set the design's clock rate after this call,
-     * skipped or not.
+     * A skipped write changes nothing on the card: reset your own kernels
+     * before using them.
+     *
+     * Clock: vrtd parks the user clock before a write and when the last
+     * holder of a design disconnects.  Set the design's clock rate after a
+     * write that was not skipped, or after a skipped one when numHolders is 1.
+     * When the write was skipped and others hold the design, leave the clock
+     * alone: they are running at it.
+     *
+     * vrtd records the design once the transfer and the PF2 refresh completed;
+     * it does not check that the card applied the PDI.  If a written design
+     * does not respond, call forgetDesign() and write it again.
      *
      * A design made of several PDIs is written with one call per PDI, all with
      * the same @p uuid and all but the last with DesignWriteMore.  If the
@@ -344,12 +374,12 @@ public:
      * @param requiredShell Hardware shell required by the design.
      * @param uuid          UUID of the design; null if it has none.
      * @param flags         Bitmask of DesignWriteForce and DesignWriteMore.
-     * @return true if the design was already loaded and nothing was written.
+     * @return Whether the write was skipped and how many connections hold the design.
      * @throws vrtd::Error on error; VRTD_RET_BUSY if another client holds the
      *         loaded design.
      */
-    bool designWrite(int input_fd, ShellType requiredShell = ShellType::Service,
-                     const DesignUuid& uuid = {}, uint8_t flags = 0) const;
+    DesignWriteResult designWrite(int input_fd, ShellType requiredShell = ShellType::Service,
+                                  const DesignUuid& uuid = {}, uint8_t flags = 0) const;
 
     /**
      * @brief Perform a design writer transfer from a file path.
@@ -359,9 +389,9 @@ public:
      *
      * @throws vrtd::Error on error.
      */
-    bool designWriteFile(std::string_view path,
-                         ShellType requiredShell = ShellType::Service,
-                         const DesignUuid& uuid = {}, uint8_t flags = 0) const;
+    DesignWriteResult designWriteFile(std::string_view path,
+                                      ShellType requiredShell = ShellType::Service,
+                                      const DesignUuid& uuid = {}, uint8_t flags = 0) const;
 
     /**
      * @brief Program a PDI into cfgmem and reset into the programmed partition.
@@ -474,8 +504,9 @@ private:
            std::function<void(const Device&, ShellType)> fResetSequence,
            std::function<void(const Device&, ShellType, bool)> fSetShellState,
            std::function<DesignInfo(const Device&)> fGetDesignInfo,
-           std::function<bool(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite,
-           std::function<bool(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile,
+           std::function<void(const Device&)> fForgetDesign,
+           std::function<DesignWriteResult(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite,
+           std::function<DesignWriteResult(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile,
            std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
            std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
            std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
@@ -500,8 +531,9 @@ private:
     std::function<void(const Device&, ShellType)> fResetSequence;
     std::function<void(const Device&, ShellType, bool)> fSetShellState;
     std::function<DesignInfo(const Device&)> fGetDesignInfo;
-    std::function<bool(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite;
-    std::function<bool(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile;
+    std::function<void(const Device&)> fForgetDesign;
+    std::function<DesignWriteResult(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite;
+    std::function<DesignWriteResult(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile;
     std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram;
     std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile;
     std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate;

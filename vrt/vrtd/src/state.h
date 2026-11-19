@@ -29,6 +29,7 @@
 #include "serve.h"
 
 struct flash_worker;
+struct design_write_hw;
 
 struct vrtd {
     struct config *config;
@@ -37,6 +38,9 @@ struct vrtd {
     uint64_t next_conn_id;
 
     struct device_ptr_array devices;
+
+    /** @brief Steps of a design write that act on the card (non-owning). */
+    const struct design_write_hw *design_write_hw;
 
     /**
      * @brief Background worker that runs cfgmem (flash) programming off the

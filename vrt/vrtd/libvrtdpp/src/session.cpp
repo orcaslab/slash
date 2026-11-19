@@ -161,6 +161,7 @@ Device Session::getDevice(size_t i) const {
         [&](const Device& device, ShellType shellType) { return resetSequence(device, shellType); },
         [&](const Device& device, ShellType shellType, bool jtag) { return setShellState(device, shellType, jtag); },
         [&](const Device& device) { return getDesignInfo(device); },
+        [&](const Device& device) { return forgetDesign(device); },
         [&](const Device& device, int input_fd, ShellType requiredShell, const DesignUuid& uuid, uint8_t flags) {
             return designWrite(device, input_fd, requiredShell, uuid, flags);
         },
@@ -241,6 +242,7 @@ Device Session::getDeviceByBdf(std::string_view bdf) const {
         [&](const Device& device, ShellType shellType) { return resetSequence(device, shellType); },
         [&](const Device& device, ShellType shellType, bool jtag) { return setShellState(device, shellType, jtag); },
         [&](const Device& device) { return getDesignInfo(device); },
+        [&](const Device& device) { return forgetDesign(device); },
         [&](const Device& device, int input_fd, ShellType requiredShell, const DesignUuid& uuid, uint8_t flags) {
             return designWrite(device, input_fd, requiredShell, uuid, flags);
         },
@@ -596,43 +598,55 @@ DesignInfo Session::getDesignInfo(const Device& device) const {
     return info;
 }
 
-bool Session::designWrite(const Device& device, int input_fd,
-                          ShellType requiredShell, const DesignUuid& uuid,
-                          uint8_t flags) const {
+void Session::forgetDesign(const Device& device) const {
     if (isClosed()) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
     std::lock_guard<std::mutex> lk(*m);
 
-    bool skipped = false;
+    auto ret = vrtd_forget_design(fd, device.getNum());
+    if (ret != VRTD_RET_OK) {
+        throw Error(ret);
+    }
+}
+
+DesignWriteResult Session::designWrite(const Device& device, int input_fd,
+                                       ShellType requiredShell, const DesignUuid& uuid,
+                                       uint8_t flags) const {
+    if (isClosed()) {
+        throw Error(VRTD_RET_BAD_LIB_CALL);
+    }
+    std::lock_guard<std::mutex> lk(*m);
+
+    vrtd_design_write_result raw = {};
     auto ret = vrtd_design_write(fd, device.getNum(), input_fd,
                                  static_cast<uint8_t>(requiredShell),
-                                 uuid.data(), flags, &skipped);
+                                 uuid.data(), flags, &raw);
     if (ret != VRTD_RET_OK) {
         throw Error(ret);
     }
 
-    return skipped;
+    return DesignWriteResult{raw.skipped, raw.num_holders};
 }
 
-bool Session::designWriteFile(const Device& device, std::string_view path,
-                              ShellType requiredShell, const DesignUuid& uuid,
-                              uint8_t flags) const {
+DesignWriteResult Session::designWriteFile(const Device& device, std::string_view path,
+                                           ShellType requiredShell, const DesignUuid& uuid,
+                                           uint8_t flags) const {
     if (isClosed()) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
     std::lock_guard<std::mutex> lk(*m);
 
     std::string path_str(path);
-    bool skipped = false;
+    vrtd_design_write_result raw = {};
     auto ret = vrtd_design_write_file(fd, device.getNum(), path_str.c_str(),
                                       static_cast<uint8_t>(requiredShell),
-                                      uuid.data(), flags, &skipped);
+                                      uuid.data(), flags, &raw);
     if (ret != VRTD_RET_OK) {
         throw Error(ret);
     }
 
-    return skipped;
+    return DesignWriteResult{raw.skipped, raw.num_holders};
 }
 
 void Session::cfgmemProgram(

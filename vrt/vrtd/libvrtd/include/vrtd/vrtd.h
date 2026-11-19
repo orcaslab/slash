@@ -56,6 +56,16 @@ extern "C" {
 struct vrtd_buffer;
 
 /**
+ * @brief Outcome of a successful design write.
+ */
+struct vrtd_design_write_result {
+    /** The device already held the design and nothing was written. */
+    bool skipped;
+    /** Connections that hold the design now, this one included. */
+    uint32_t num_holders;
+};
+
+/**
  * @brief AXI-MM / NoC channel selection for a buffer's QDMA queue pair.
  *
  * Sent to the daemon, which forwards it to the SLASH driver's qpair-add ioctl
@@ -440,6 +450,24 @@ enum vrtd_ret vrtd_get_design_info(
 );
 
 /**
+ * @brief Forget the design loaded on a device.
+ *
+ * Call this after changing the fabric without a design write, for example
+ * after loading an image over JTAG.  The next design write is then not
+ * skipped, and a write in flight records nothing.  Holders keep their
+ * references.  Requires the design-write permission.
+ *
+ * @param fd   Connected vrtd socket file descriptor.
+ * @param dev  Device index (0‑based).
+ *
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ */
+enum vrtd_ret vrtd_forget_design(
+    int fd,
+    uint32_t dev
+);
+
+/**
  * @brief Perform a design writer transfer for a device.
  *
  * The input FD is sent to the daemon via SCM_RIGHTS. On success the daemon
@@ -447,13 +475,26 @@ enum vrtd_ret vrtd_get_design_info(
  *
  * The daemon does not write a design the device already holds: when @p uuid
  * is non-null and equal to the UUID of the loaded design, the call returns at
- * once with @p skipped_out set.  #VRTD_DESIGN_WRITE_FORCE writes it anyway.
- * In both cases this connection then holds a reference on the design until it
- * is closed, and no other connection can replace the design meanwhile.
+ * once with @c skipped set in @p result_out.  #VRTD_DESIGN_WRITE_FORCE writes
+ * it anyway.  In both cases this connection then holds a reference on the
+ * design until it is closed, and no other connection can replace the design
+ * with a design write meanwhile.  A write that arrives while another
+ * connection's write is in flight fails with #VRTD_RET_BUSY, even for the
+ * same design; the daemon does not queue it.
  *
- * The daemon parks the user clock before a write and when the last holder of
- * a design disconnects, so set the design's clock rate after this call,
- * skipped or not.
+ * A skipped write changes nothing on the card: the design keeps the state its
+ * holders left it in.  Reset your own kernels before using them.
+ *
+ * Clock: the daemon parks the user clock before a write and when the last
+ * holder of a design disconnects.  Set the design's clock rate after a write
+ * that was not skipped, or after a skipped one when @c num_holders is 1 (the
+ * clock was parked when the last holder left).  When the write was skipped
+ * and others hold the design, leave the clock alone: they are running at it.
+ *
+ * The daemon records the design as loaded once the transfer and the PF2
+ * refresh completed; it does not check that the card applied the PDI.  If a
+ * design that was written does not respond, call vrtd_forget_design() and
+ * write it again, or force the write.
  *
  * A design made of several PDIs is written with one call per PDI, all with
  * the same @p uuid and all but the last with #VRTD_DESIGN_WRITE_MORE.  If the
@@ -466,8 +507,8 @@ enum vrtd_ret vrtd_get_design_info(
  * @param uuid       UUID of the design (#VRTD_DESIGN_UUID_LEN bytes), or NULL
  *                   if it has none.
  * @param flags      Bitmask of enum vrtd_design_write_flags.
- * @param skipped_out Set to true if the design was already loaded and nothing
- *                   was written, to false otherwise. May be NULL.
+ * @param result_out Receives whether the write was skipped and how many
+ *                   connections hold the design. May be NULL.
  *
  * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress
  *         or another client holds the loaded design; otherwise a #vrtd_ret
@@ -481,7 +522,7 @@ enum vrtd_ret vrtd_design_write(
     uint8_t required_shell,
     const uint8_t *uuid,
     uint8_t flags,
-    bool *skipped_out
+    struct vrtd_design_write_result *result_out
 );
 
 /**
@@ -497,8 +538,8 @@ enum vrtd_ret vrtd_design_write(
  * @param uuid       UUID of the design (#VRTD_DESIGN_UUID_LEN bytes), or NULL
  *                   if it has none.
  * @param flags      Bitmask of enum vrtd_design_write_flags.
- * @param skipped_out Set to true if the design was already loaded and nothing
- *                   was written, to false otherwise. May be NULL.
+ * @param result_out Receives whether the write was skipped and how many
+ *                   connections hold the design. May be NULL.
  *
  * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress
  *         or another client holds the loaded design; otherwise a #vrtd_ret
@@ -512,7 +553,7 @@ enum vrtd_ret vrtd_design_write_file(
     uint8_t required_shell,
     const uint8_t *uuid,
     uint8_t flags,
-    bool *skipped_out
+    struct vrtd_design_write_result *result_out
 );
 
 /**

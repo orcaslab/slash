@@ -59,8 +59,9 @@ Device::Device(uint32_t num,
                std::function<void(const Device&, ShellType)> fResetSequence,
                std::function<void(const Device&, ShellType, bool)> fSetShellState,
                std::function<DesignInfo(const Device&)> fGetDesignInfo,
-               std::function<bool(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite,
-               std::function<bool(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile,
+               std::function<void(const Device&)> fForgetDesign,
+               std::function<DesignWriteResult(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite,
+               std::function<DesignWriteResult(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile,
                std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
                std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
                std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
@@ -83,6 +84,7 @@ Device::Device(uint32_t num,
     this->fResetSequence = fResetSequence;
     this->fSetShellState = fSetShellState;
     this->fGetDesignInfo = fGetDesignInfo;
+    this->fForgetDesign = fForgetDesign;
     this->fDesignWrite = fDesignWrite;
     this->fDesignWriteFile = fDesignWriteFile;
     this->fCfgmemProgram = fCfgmemProgram;
@@ -167,13 +169,17 @@ DesignInfo Device::getDesignInfo() const {
     return fGetDesignInfo(*this);
 }
 
-bool Device::designWrite(int input_fd, ShellType requiredShell,
-                         const DesignUuid& uuid, uint8_t flags) const {
+void Device::forgetDesign() const {
+    fForgetDesign(*this);
+}
+
+DesignWriteResult Device::designWrite(int input_fd, ShellType requiredShell,
+                                      const DesignUuid& uuid, uint8_t flags) const {
     return fDesignWrite(*this, input_fd, requiredShell, uuid, flags);
 }
 
-bool Device::designWriteFile(std::string_view path, ShellType requiredShell,
-                             const DesignUuid& uuid, uint8_t flags) const {
+DesignWriteResult Device::designWriteFile(std::string_view path, ShellType requiredShell,
+                                          const DesignUuid& uuid, uint8_t flags) const {
     return fDesignWriteFile(*this, path, requiredShell, uuid, flags);
 }
 

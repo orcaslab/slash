@@ -47,7 +47,7 @@
  *     get_device_by_bdf, get_num_devices, get_bar_info, qdma_get_info):
  *     require only the `query` permission.
  *   - **Device-access** operations (get_bar_fd, qdma_qpair_add/op/get_fd,
- *     buffer_open/close, design_write, clock_op): require `query` plus
+ *     buffer_open/close, design_write, forget_design, clock_op): require `query` plus
  *     the corresponding per-device per-subsystem permission (bar, qdma,
  *     buffer, design-write, cfgmem-program, clock) as defined in the role's device_policies.
  *   - **Hotplug** operations (device_hotplug_op): require `query` plus
@@ -760,6 +760,33 @@ int auth_request_design_write(
 
     return auth_check_device_permission(
         client, req_body->dev_number, AUTH_SUBSYSTEM_DESIGN_WRITE, "design_write"
+    );
+}
+
+/**
+ * @brief Authorize a forget_design request.
+ *
+ * Requires: query + design-write permission on the target device.  Forgetting
+ * the loaded design makes the next design write happen, which is what a
+ * design-write permission allows anyway.
+ *
+ * @param client    The requesting client.
+ * @param req_body  The request payload.
+ * @return 1 if authorized, 0 if denied, <0 on internal error.
+ */
+int auth_request_forget_design(
+    struct client *client,
+    const struct vrtd_req_forget_design *req_body
+)
+{
+    assert(client != NULL);
+    assert(req_body != NULL);
+
+    int ret = ensure_role(client);
+    PROPAGATE_ERROR(ret);
+
+    return auth_check_device_permission(
+        client, req_body->dev_number, AUTH_SUBSYSTEM_DESIGN_WRITE, "forget_design"
     );
 }
 
