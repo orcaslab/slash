@@ -66,6 +66,14 @@ add_executable(vrtd ${CMAKE_CURRENT_SOURCE_DIR}/main.c)
 
 target_link_libraries(vrtd PRIVATE vrtd_core)
 
+# _FORTIFY_SOURCE (on by default in optimized distribution builds) aborts the
+# process when a read() or memcpy() is larger than its destination, and GCC
+# reports such a call at build time with an attribute warning. Make that
+# warning fatal for vrtd's code and, at the LTO link, for the AMI code inlined
+# into it, so the build fails instead of the daemon.
+target_compile_options(vrtd_core PRIVATE -Werror=attribute-warning)
+target_link_options(vrtd PRIVATE -Werror=attribute-warning)
+
 set_target_properties(vrtd PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED YES

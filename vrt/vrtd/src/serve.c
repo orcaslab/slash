@@ -132,7 +132,11 @@
 
 #include <ami.h>
 #include <ami_device.h>
+#include <ami_device_internal.h>
 #include <ami_sensor.h>
+
+/* AMI's sysfs attribute for the device state (SYSFS_DEV_STATE, private to ami_device.c). */
+#define AMI_SYSFS_DEV_STATE "dev_state"
 
 #include "array.h"
 #include "auth.h"
@@ -705,13 +709,22 @@ static bool card_amc_ready(const struct device *d, char *state, size_t state_len
         snprintf(state, state_len, "AMI device %s not found", pf0_bdf);
         return false;
     }
-    char buf[AMI_DEV_STATE_SIZE] = {0};
-    int ret = ami_dev_get_state(dev, buf);
+    /*
+     * Read the attribute with ami_read_sysfs() and the buffer it requires, not
+     * with ami_dev_get_state(). That one hands ami_read_sysfs() a buffer of
+     * AMI_DEV_STATE_SIZE (33) bytes, which then read()s up to
+     * AMI_SYSFS_STR_MAX (256): an optimized build inlines the two, and
+     * _FORTIFY_SOURCE aborts the daemon on every call ("buffer overflow
+     * detected"), in the middle of a design write.
+     */
+    char buf[AMI_SYSFS_STR_MAX + 1] = {0};
+    int ret = ami_read_sysfs(dev, AMI_SYSFS_DEV_STATE, buf);
     ami_dev_delete(&dev);
     if (ret != AMI_STATUS_OK) {
         snprintf(state, state_len, "unreadable");
         return false;
     }
+    buf[strcspn(buf, "\r\n")] = '\0';
     snprintf(state, state_len, "%s", buf);
     return strcmp(buf, AMI_DEV_READY_STR) == 0 || strcmp(buf, "MISSING_INFO") == 0;
 }
