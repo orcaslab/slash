@@ -447,6 +447,97 @@ TEST_F(DesignStateTest, ForgetKeepsHolders) {
     EXPECT_TRUE(design_state_release(&ds, kBob));
 }
 
+/* ---- Forget while a design is being written --------------------------------- */
+
+TEST_F(DesignStateTest, ForgetDuringAWriteMakesItsCompletionRecordNothing) {
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+
+    /* A hotplug or JTAG load hits the card while the transfer runs. */
+    design_state_forget(&ds);
+    design_state_write_completed(&ds, kDesignA, false);
+
+    EXPECT_TRUE(design_uuid_is_null(ds.uuid));
+    EXPECT_EQ(decide(kAlice, kDesignA), DESIGN_REQUEST_WRITE);
+    /* The writer still holds what is on the card. */
+    EXPECT_TRUE(design_state_holds(&ds, kAlice));
+}
+
+TEST_F(DesignStateTest, ForgetBetweenPdisPoisonsTheWholeDesign) {
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+    design_state_write_completed(&ds, kDesignA, true);
+
+    design_state_forget(&ds);
+
+    /* The last PDI is written cleanly, but the first one may be gone. */
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+    design_state_write_completed(&ds, kDesignA, false);
+
+    EXPECT_TRUE(design_uuid_is_null(ds.uuid));
+}
+
+TEST_F(DesignStateTest, PoisonLastsForOneDesignOnly) {
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+    design_state_forget(&ds);
+    design_state_write_completed(&ds, kDesignA, false);
+    ASSERT_TRUE(design_uuid_is_null(ds.uuid));
+
+    /* The next write starts clean and is recorded. */
+    write(kAlice, kDesignB);
+    EXPECT_TRUE(loadedIs(kDesignB));
+}
+
+TEST_F(DesignStateTest, ForgetOutsideAWritePoisonsNothing) {
+    design_state_forget(&ds);
+
+    write(kAlice, kDesignA);
+
+    EXPECT_TRUE(loadedIs(kDesignA));
+}
+
+TEST_F(DesignStateTest, FailedWriteClearsThePoison) {
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+    design_state_forget(&ds);
+    design_state_write_failed(&ds);
+
+    write(kBob, kDesignA);
+
+    EXPECT_TRUE(loadedIs(kDesignA));
+}
+
+TEST_F(DesignStateTest, WriterLeavingClearsThePoison) {
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+    design_state_write_completed(&ds, kDesignA, true);
+    design_state_forget(&ds);
+    ASSERT_TRUE(design_state_release(&ds, kAlice));
+
+    write(kBob, kDesignB);
+
+    EXPECT_TRUE(loadedIs(kDesignB));
+}
+
+/* ---- Write whose PF2 refresh failed ------------------------------------------ */
+
+TEST_F(DesignStateTest, UnconfirmedWriteLeavesDesignUnknownAndHeld) {
+    write(kAlice, kDesignA);
+
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+    design_state_write_unconfirmed(&ds);
+
+    EXPECT_TRUE(design_uuid_is_null(ds.uuid));
+    EXPECT_TRUE(design_state_holds(&ds, kAlice));
+    EXPECT_EQ(decide(kAlice, kDesignB), DESIGN_REQUEST_WRITE);
+}
+
+TEST_F(DesignStateTest, UnconfirmedWriteClosesTheDesign) {
+    ASSERT_EQ(design_state_write_begin(&ds, kAlice), 0);
+    design_state_forget(&ds);
+    design_state_write_unconfirmed(&ds);
+
+    write(kAlice, kDesignA);
+
+    EXPECT_TRUE(loadedIs(kDesignA));
+}
+
 TEST_F(DesignStateTest, CleanupReturnsToAFreshState) {
     write(kAlice, kDesignA);
     skip(kBob, kDesignA);

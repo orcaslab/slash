@@ -42,6 +42,8 @@ void cleanup_design_state(struct design_state *ds)
 
     uint64_array_free(&ds->holders);
     memset(ds->uuid, 0, sizeof(ds->uuid));
+    ds->writing = false;
+    ds->poisoned = false;
 }
 
 bool design_uuid_is_null(const uint8_t uuid[VRTD_DESIGN_UUID_LEN])
@@ -146,6 +148,12 @@ int design_state_write_begin(struct design_state *ds, uint64_t conn_id)
 
     memset(ds->uuid, 0, sizeof(ds->uuid));
 
+    /* A further PDI of the design that is open inherits its poison. */
+    if (!ds->writing) {
+        ds->writing = true;
+        ds->poisoned = false;
+    }
+
     return 0;
 }
 
@@ -159,18 +167,36 @@ void design_state_write_completed(
         return;
     }
 
-    memcpy(ds->uuid, uuid, sizeof(ds->uuid));
+    if (!ds->poisoned) {
+        memcpy(ds->uuid, uuid, sizeof(ds->uuid));
+    }
+
+    ds->writing = false;
+    ds->poisoned = false;
+}
+
+void design_state_write_unconfirmed(struct design_state *ds)
+{
+    memset(ds->uuid, 0, sizeof(ds->uuid));
+    ds->writing = false;
+    ds->poisoned = false;
 }
 
 void design_state_write_failed(struct design_state *ds)
 {
     memset(ds->uuid, 0, sizeof(ds->uuid));
     ds->holders.len = 0;
+    ds->writing = false;
+    ds->poisoned = false;
 }
 
 void design_state_forget(struct design_state *ds)
 {
     memset(ds->uuid, 0, sizeof(ds->uuid));
+
+    if (ds->writing) {
+        ds->poisoned = true;
+    }
 }
 
 bool design_state_release(struct design_state *ds, uint64_t conn_id)
@@ -181,5 +207,13 @@ bool design_state_release(struct design_state *ds, uint64_t conn_id)
 
     uint64_array_rm_by_value(&ds->holders, conn_id);
 
-    return ds->holders.len == 0;
+    if (ds->holders.len != 0) {
+        return false;
+    }
+
+    /* Only the writer holds a design that is being written; it is gone. */
+    ds->writing = false;
+    ds->poisoned = false;
+
+    return true;
 }

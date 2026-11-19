@@ -40,26 +40,38 @@
  *   - after anything that may have changed the fabric outside a design write
  *     (@c design_state_forget).
  *
+ * "Completes" means that the transfer and the PF2 refresh succeeded.  vrtd
+ * does not check that the card applied the PDI.
+ *
+ * A forget can arrive while a design is being written: between the accept
+ * and the completion of a transfer, or between two PDIs of one design.  The
+ * fabric then holds neither the old design nor a clean copy of the new one,
+ * so the completion of that design records nothing.
+ *
  * @section design_state_holders Holders
  *
  * A client connection holds a reference on the loaded design when its request
  * wrote the design or was skipped because the design was already loaded.  It
  * holds the reference until it disconnects.  While a connection holds a
- * reference no other connection may replace the design.  When the last holder
- * leaves, the caller parks the design's clock.
+ * reference no other connection may replace the design with a design write.
+ * When the last holder leaves, the caller parks the design's clock.
+ *
+ * The references guard against design writes only.  A reset, a cfgmem
+ * program and a hotplug operation are administrative requests: they are not
+ * refused because a design is held.  A reset rebuilds the device object, and
+ * the new object starts with no holders.
  */
 
 #ifndef VRTD_DESIGN_STATE_H
 #define VRTD_DESIGN_STATE_H
 
+#include "array.h"
+#include "utils.h"
+#include "vrtd/wire.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#include <vrtd/wire.h>
-
-#include "array.h"
-#include "utils.h"
 
 /** Size of a UUID in its canonical text form, including the terminating NUL. */
 #define DESIGN_UUID_STR_LEN 37
@@ -86,6 +98,12 @@ struct design_state {
     uint8_t uuid[VRTD_DESIGN_UUID_LEN];
     /** @brief Connection ids that hold a reference on the loaded design (owning). */
     struct uint64_array holders;
+    /** @brief A design is being written: a write was accepted and the last
+     *  PDI of its design has not completed yet. */
+    bool writing;
+    /** @brief A forget arrived while @c writing: the design being written is
+     *  not recorded when it completes. */
+    bool poisoned;
 };
 
 /**
@@ -97,6 +115,8 @@ struct design_state design_state_init(void)
     return (struct design_state) {
         .uuid = {0},
         .holders = uint64_array_init(),
+        .writing = false,
+        .poisoned = false,
     };
 }
 
@@ -179,6 +199,10 @@ int design_state_hold(struct design_state *ds, uint64_t conn_id);
  * whatever the write leaves on the device.  Fails without changing the state
  * if another connection holds a reference.
  *
+ * The write opens a design, or continues the one that is open: a design stays
+ * open until a write without more PDIs to follow completes, a write fails, or
+ * its holder leaves.
+ *
  * @param ds      The device's design state.
  * @param conn_id The requesting connection.
  * @return 0 on success, -1 if another connection holds the design or on
@@ -191,7 +215,8 @@ int design_state_write_begin(struct design_state *ds, uint64_t conn_id);
  * @brief Record that a design write completed successfully.
  *
  * The loaded UUID becomes @p uuid, unless more PDIs of the design follow:
- * the design is complete only when its last PDI is written.
+ * the design is complete only when its last PDI is written.  If a forget
+ * arrived while the design was being written, nothing is recorded.
  *
  * @param ds           The device's design state.
  * @param uuid         UUID carried by the request; null leaves it unknown.
@@ -202,6 +227,17 @@ void design_state_write_completed(
     const uint8_t uuid[VRTD_DESIGN_UUID_LEN],
     bool more_follow
 );
+
+/**
+ * @brief Record that a design write ended but its result cannot be named.
+ *
+ * The transfer finished but a later step of the write failed (the PF2
+ * refresh).  The UUID stays unknown and the design is closed; the requester
+ * keeps its reference.
+ *
+ * @param ds The device's design state.
+ */
+void design_state_write_unconfirmed(struct design_state *ds);
 
 /**
  * @brief Record that a design write failed.
@@ -221,12 +257,18 @@ void design_state_write_failed(struct design_state *ds);
  * their references: they are still connected and the clock of whatever runs
  * is still theirs.
  *
+ * A design that is being written is poisoned: its completion will not record
+ * a UUID.
+ *
  * @param ds The device's design state.
  */
 void design_state_forget(struct design_state *ds);
 
 /**
  * @brief Drop the reference of a connection that is going away.
+ *
+ * A design the connection was writing is abandoned: the next write starts a
+ * new one.
  *
  * @param ds      The device's design state.
  * @param conn_id The connection that disconnected.
