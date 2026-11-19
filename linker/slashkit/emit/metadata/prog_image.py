@@ -24,6 +24,7 @@ import tarfile
 from pathlib import Path
 
 from slashkit.core.command_config import LinkerConfiguration
+from slashkit.emit.metadata.design_uuid import stamp_system_map_uuid
 from slashkit.emit.metadata.timing_freq import apply_timing_frequency_cap
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,12 @@ def build_vbin(config: LinkerConfiguration) -> Path:
         base_freq_hz=base_freq_hz,
         hw_build_dir=config.build_dir,
     )
+
+    # Give this vbin its identity. vrtd skips a design write when the board
+    # already holds a design with the same UUID, so every archive written here
+    # gets a new one, even when it is rebuilt from the same build directory.
+    design_uuid = stamp_system_map_uuid(system_map)
+    logger.info("Design UUID: %s", design_uuid)
 
     logger.info("Creating vbin archive: %s", config.out_path)
 

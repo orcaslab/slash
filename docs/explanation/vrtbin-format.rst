@@ -75,6 +75,7 @@ Schema
 .. code-block:: xml
 
    <SystemMap>
+     <UUID>3f0c1a52-7d7e-4b0e-9a55-0c2f6d1e8b47</UUID>
      <Platform>Hardware</Platform>
      <ShellType>service</ShellType>
      <ClockFrequency>250000000</ClockFrequency>
@@ -111,6 +112,13 @@ Schema
    </SystemMap>
 
 Key elements:
+
+``<UUID>``
+   Identity of the design. ``slashkit`` draws a random UUID each time it
+   writes a hardware vbin, so two vbins have the same UUID only if they are
+   the same file. ``vrtd`` remembers the UUID of the design it wrote to a
+   board and does not program a vbin with the same UUID again. A vbin
+   without this element has the null UUID and is always programmed.
 
 ``<Platform>``
    One of ``Hardware``, ``Emulation``, or ``Simulation``. VRT maps this to
@@ -159,8 +167,11 @@ When you construct ``vrt::Device(bdf, vrtbinPath)``:
    ZeroMQ to ``vpp_sim`` (simulation).
 
 5. **Program** — on hardware, VRT programs the FPGA with the PDI
-   bitstream(s) via the vrtd daemon. On emulation/simulation, it launches
-   the model executable in a background thread.
+   bitstream(s) via the vrtd daemon. If the board already holds the design
+   (same ``<UUID>``), vrtd writes nothing and VRT logs that the design is
+   already loaded. Set the environment variable ``VRT_FORCE_PROGRAM=1`` to
+   program it anyway. On emulation/simulation, VRT launches the model
+   executable in a background thread.
 
 Inspecting a Vrtbin
 ===================
@@ -201,3 +212,17 @@ target is created per platform (``hw``, ``emu``, ``sim``).
 See :doc:`/reference/cmake/slashtools` for the full ``add_vbin()``
 reference and :doc:`/tutorials/user/your-first-kernel` for a worked
 example.
+
+Giving a Vrtbin a New UUID
+==========================
+
+The linker stamps the UUID when it writes the vbin. To give an existing vbin
+a fresh UUID without relinking, for example a vbin built before UUIDs existed
+or a copy whose PDI was replaced by hand:
+
+.. code-block:: bash
+
+   slashkit stamp-uuid my_design.vbin
+
+The command rewrites the archive in place, replaces any UUID it has, leaves
+every other file in it unchanged, and prints the new UUID.

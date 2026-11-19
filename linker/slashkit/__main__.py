@@ -24,6 +24,7 @@ import logging
 import os
 import threading
 import time
+from pathlib import Path
 
 from slashkit.emit.hw.tcl_gen import generate_tcl
 from slashkit.emit.hw.project_gen import (
@@ -37,6 +38,7 @@ from slashkit.emit.emu.tcl_gen import generate_emu_tcl
 from slashkit.emit.sim.project_gen import create_sim_project, build_sim_project
 from slashkit.emit.emu.project_gen import build_emu_project, package_emu_artifacts
 
+from slashkit.emit.metadata.design_uuid import restamp_vbin
 from slashkit.emit.metadata.prog_image import build_vbin
 from slashkit.core.command_config import (
     LinkerConfiguration,
@@ -168,6 +170,10 @@ def static_shell_path(args) -> None:
         print(path.resolve())
 
 
+def stamp_uuid(args) -> None:
+    print(restamp_vbin(Path(args.vbin)))
+
+
 MAIN_HELP_EPILOG = """
 Typical Workflow:
   Most users will use the 'link' subcommand to link kernel IP cores into
@@ -214,6 +220,13 @@ def main():
         help="Shell type to resolve (default: service)")
     static_shell_path_parser.set_defaults(
         config_class=None, operation=static_shell_path)
+
+    stamp_uuid_parser = sub_parsers.add_parser(
+        "stamp-uuid",
+        help="Give an already-built vbin a fresh UUID without relinking")
+    stamp_uuid_parser.add_argument(
+        "vbin", help="Path to the vbin to update in place")
+    stamp_uuid_parser.set_defaults(config_class=None, operation=stamp_uuid)
 
     args = ap.parse_args()
 
