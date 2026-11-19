@@ -118,6 +118,7 @@
 #include <systemd/sd-journal.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/syslog.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
