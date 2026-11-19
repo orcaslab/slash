@@ -259,16 +259,28 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     if (platform == Platform::HARDWARE) {
         vrtdSession = std::make_shared<vrtd::Session>();
         vrtdDevice = vrtdSession->getDeviceByBdf(bdfFull);
+        // Without programming, the clock is set as before. With programming,
+        // a design that other clients already run keeps its clock: they are
+        // using it. vrtd parked the clock when the last holder left, so the
+        // sole holder of a skipped design sets it again.
         bool programmed = false;
+        bool setClock = true;
         if (program) {
-            programmed = programDevice();
+            const vrtd::DesignWriteResult result = programDevice();
+            programmed = !result.skipped;
+            setClock = programmed || result.numHolders <= 1;
+            if (!setClock) {
+                utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
+                                   "Design is in use by {} other client(s); leaving its clock alone",
+                                   result.numHolders - 1);
+            }
         }
         parseSystemMap();
         if (programmed && !kernels.empty()) {
             sleep(1); // wait for device to be ready after programming before accessing BAR
 
         }
-        if (vrtdDevice.has_value()) {
+        if (vrtdDevice.has_value() && setClock) {
             // Program the shell's clocking wizard to the frequency the vbin
             // was built (and timing-capped) for. The shell boots user_clk at
             // 200 MHz; without this write the recorded ClockFrequency is
@@ -393,7 +405,7 @@ void Device::cleanup() {
 
 std::string Device::getBdf() { return bdf; }
 
-bool Device::programDevice() {
+vrtd::DesignWriteResult Device::programDevice() {
     if (pdiPaths.empty() && !pdiPath.empty()) {
         pdiPaths.push_back(pdiPath);
     }
@@ -406,6 +418,7 @@ bool Device::programDevice() {
     const DesignUuid uuid = vrtbin.getUuid();
     const uint8_t forceFlag = forceProgramRequested() ? vrtd::DesignWriteForce : 0;
 
+    vrtd::DesignWriteResult result;
     for (std::size_t i = 0; i < pdiPaths.size(); ++i) {
         const std::string& pdi = pdiPaths[i];
         const bool last = i + 1 == pdiPaths.size();
@@ -413,18 +426,17 @@ bool Device::programDevice() {
 
         utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
                            "Programming PDI via vrtd design writer {}", pdi);
-        const bool skipped =
-            getVrtdDevice().designWriteFile(pdi, toVrtdShellType(requiredShell), uuid, flags);
-        if (skipped) {
+        result = getVrtdDevice().designWriteFile(pdi, toVrtdShellType(requiredShell), uuid, flags);
+        if (result.skipped) {
             // vrtd decides on the first PDI; the rest of the design is there too.
             utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
                                "Design {} is already loaded on {}; not programming",
                                vrtd::toString(uuid), bdfFull);
-            return false;
+            return result;
         }
     }
 
-    return true;
+    return result;
 }
 
 void Device::setFrequency(uint64_t freq) {

@@ -25,6 +25,7 @@ add_executable(
     debug/clockwiz.cpp
     debug/hotplug.cpp
     debug/mem_poke.cpp
+    forget_design.cpp
     inspect.cpp
     list.cpp
     program.cpp

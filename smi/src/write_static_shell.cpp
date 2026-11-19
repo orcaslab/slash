@@ -398,6 +398,32 @@ int runFlashMode(const WriteStaticShell::Options& options) {
     return 0;
 }
 
+/// Makes VRTD forget the design it wrote to the board(s) the JTAG load may
+/// have reached: a later program of the same vbin must write it again.
+/// Without a device address the JTAG target cannot be mapped to a board, so
+/// every board VRTD knows is forgotten.  Even a failed xsdb run may have
+/// changed the fabric; if forgetting fails too, the xsdb error is the one
+/// reported.
+void forgetJtagTargets(const vrtd::Session& session, const std::string& bdf,
+                       std::exception_ptr xsdbError) {
+    try {
+        if (!bdf.empty()) {
+            session.getDeviceByBdf(bdf).forgetDesign();
+            return;
+        }
+
+        const uint32_t numDevices = session.getNumDevices();
+        for (uint32_t i = 0; i < numDevices; ++i) {
+            session.getDevice(i).forgetDesign();
+        }
+    } catch (const std::exception& e) {
+        if (!xsdbError) {
+            throw;
+        }
+        std::cerr << "warning: VRTD could not forget the loaded design: " << e.what() << "\n";
+    }
+}
+
 void rethrowXsdbAndRescanErrors(std::exception_ptr xsdbError,
                                 const std::exception& rescanError) {
     try {
@@ -450,11 +476,25 @@ int runJtagMode(const WriteStaticShell::Options& options) {
         xsdbError = std::current_exception();
     }
 
+    // The boards whose PCIe functions were left in place are still known to
+    // VRTD; forget their design before anything else can be written to them.
+    if (options.noRemoveDevice) {
+        reporter.stage("Forgetting the loaded design");
+        forgetJtagTargets(session, bdf, xsdbError);
+    }
+
     try {
         reporter.stage("Rescanning PCIe");
         session.hotplugRescan();
     } catch (const std::exception& e) {
         rethrowXsdbAndRescanErrors(xsdbError, e);
+    }
+
+    // A removed board comes back from the rescan as a new VRTD device, which
+    // knows no design; forgetting it states that explicitly.
+    if (!options.noRemoveDevice) {
+        reporter.stage("Forgetting the loaded design");
+        forgetJtagTargets(session, bdf, xsdbError);
     }
 
     if (xsdbError) {

@@ -405,7 +405,7 @@ struct V80Board {
     VrtdStatus  vrtd;       ///< Status of VRTD daemon registration.
     vrtd::ShellType shellType = vrtd::ShellType::Unknown; ///< Shell state reported by VRTD.
     bool        jtag{};      ///< True if VRTD reports the board as JTAG-booted.
-    vrtd::DesignInfo design; ///< Loaded design reported by VRTD (null UUID if it knows none).
+    std::optional<vrtd::DesignInfo> design; ///< Loaded design reported by VRTD; empty if the query failed.
     bool        longPrinting{};  ///< If true, include detailed sysfs info per PF.
 
     /// Detailed sysfs snapshot for each PF (populated only when longPrinting).
@@ -469,7 +469,12 @@ static std::vector<V80Board> discoverBoards(bool longPrinting, bool sensors) {
                 auto device = session.getDeviceByBdf(base);
                 board.shellType = device.getShellType();
                 board.jtag = device.isJtag();
-                board.design = device.getDesignInfo();
+                // A daemon without the design query must not cost the sensors.
+                try {
+                    board.design = device.getDesignInfo();
+                } catch (...) {
+                    board.design.reset();
+                }
                 if (sensors) {
                     board.sensors = device.getSensorInfo();
                 }
@@ -666,8 +671,10 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
     if (board.vrtd.ok) {
         out << " ";
         printShellState(out, board.shellType, board.jtag);
-        out << " ";
-        printDesignState(out, board.design);
+        if (board.design) {
+            out << " ";
+            printDesignState(out, *board.design);
+        }
     }
     out << "\n";
 
@@ -686,9 +693,11 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
             out << INDENT2;
             printShellState(out, board.shellType, board.jtag);
             out << "\n";
-            out << INDENT2;
-            printDesignState(out, board.design);
-            out << "\n";
+            if (board.design) {
+                out << INDENT2;
+                printDesignState(out, *board.design);
+                out << "\n";
+            }
         }
     }
 
@@ -753,11 +762,14 @@ Json::Value toJson(const V80Board& board) {
     } else {
         vrtdJson["shell_type"] = shellTypeName(board.shellType);
         vrtdJson["jtag"] = board.jtag;
-        // null when VRTD does not know what the board holds.
-        vrtdJson["design_uuid"] = vrtd::isNull(board.design.uuid)
-            ? Json::Value(Json::nullValue)
-            : Json::Value(vrtd::toString(board.design.uuid));
-        vrtdJson["design_holders"] = board.design.numHolders;
+        // null when VRTD does not know what the board holds; absent when
+        // the design query failed.
+        if (board.design) {
+            vrtdJson["design_uuid"] = vrtd::isNull(board.design->uuid)
+                ? Json::Value(Json::nullValue)
+                : Json::Value(vrtd::toString(board.design->uuid));
+            vrtdJson["design_holders"] = board.design->numHolders;
+        }
     }
     j["vrtd"] = vrtdJson;
 

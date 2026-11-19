@@ -38,6 +38,7 @@
 #include "debug/clockwiz.hpp"
 #include "debug/hotplug.hpp"
 #include "debug/mem_poke.hpp"
+#include "forget_design.hpp"
 #include "inspect.hpp"
 #include "list.hpp"
 #include "program.hpp"
@@ -104,6 +105,13 @@ static int smiMain(int argc, char **argv) {
     Program::Options programOptions;
     programCommand->add_option("vbin", programOptions.vbinPath, "Path to vbin file")->required();
     programCommand->add_option("-d,--device", programOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+
+    // -- forget-design (VRTD forgets the loaded design) --
+    auto* forgetDesignCommand = app.add_subcommand("forget-design",
+        "Make VRTD forget the design loaded on a board, so the next program writes it");
+    ForgetDesign::Options forgetDesignOptions;
+    forgetDesignCommand->add_option("-d,--device", forgetDesignOptions.bdf,
+        "Board address (e.g. 03:00 or 0000:03:00)")->required();
 
     // -- reset (hardware reset of board) --
     auto* resetCommand = app.add_subcommand("reset", "Hardware reset a V80 board");
@@ -322,6 +330,8 @@ static int smiMain(int argc, char **argv) {
         return List::run(listOptions);
     } else if (programCommand->parsed()) {
         return Program::run(programOptions);
+    } else if (forgetDesignCommand->parsed()) {
+        return ForgetDesign::run(forgetDesignOptions);
     } else if (resetCommand->parsed()) {
         return Reset::run(resetOptions);
     } else if (writeStaticShellCommand->parsed()) {

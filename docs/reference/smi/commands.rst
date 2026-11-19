@@ -79,6 +79,23 @@ that use it, or ``unknown`` when vrtd does not know what the board holds
    Include sensor readings (temperature, power). Requires the vrtd daemon to be
    running.
 
+forget-design
+-------------
+
+Make vrtd forget the design it last wrote to a board, so the next program of
+any vrtbin writes it. Use it after the board was loaded without vrtd (over
+JTAG with another tool), or when a programmed design does not respond.
+Applications that use the design keep running; requires the ``design-write``
+permission.
+
+.. code-block:: text
+
+   v80-smi forget-design -d <BDF>
+
+``v80-smi write-static-shell --jtag`` forgets the design itself; with
+``--no-remove-device`` it forgets the design of every board, because the JTAG
+target is not tied to a board address.
+
 inspect
 -------
 

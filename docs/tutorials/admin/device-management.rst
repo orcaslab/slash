@@ -87,8 +87,31 @@ anyway:
 
    VRT_FORCE_PROGRAM=1 v80-smi program my_design.vbin -d 03:00
 
-A design that another running application uses cannot be replaced: the
-command fails with a "busy" error until that application exits.
+A design that another running application uses cannot be replaced by
+programming another vrtbin: the command fails with a "busy" error until that
+application exits. The same error comes back when another application is
+writing a design at that moment, even the same one; run the command again.
+
+This protection covers programming only. ``v80-smi reset``, flash programming
+and hotplug operations are administrative and are not refused because an
+application uses the board: they reset the board under it.
+
+When the design is already loaded, programming changes nothing on the board:
+kernels keep the state the previous application left them in, and an
+application must reset its kernels before using them. If another application
+is running the design, its clock is left as it is.
+
+The board is recorded as holding the design once the transfer finished; VRTD
+does not check that the card applied it. If a design that was programmed
+does not respond, make VRTD forget it and program again:
+
+.. code-block:: bash
+
+   v80-smi forget-design -d 03:00
+   v80-smi program my_design.vbin -d 03:00
+
+After loading an image over JTAG with a tool other than
+``v80-smi write-static-shell --jtag``, run ``v80-smi forget-design`` too.
 
 Programming can also be done using VRT:
 

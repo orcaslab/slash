@@ -151,10 +151,13 @@ class Device {
      * environment variable VRT_FORCE_PROGRAM (non-empty and not "0") makes it
      * write the design anyway.
      *
-     * @return true if the PDIs were written, false if the design was already
-     *         loaded and nothing was written.
+     * A design that was already loaded keeps the state its other users left
+     * it in: reset your kernels before using them.
+     *
+     * @return Whether the PDIs were skipped, and how many vrtd clients hold
+     *         the design now (this device included).
      */
-    bool programDevice();
+    vrtd::DesignWriteResult programDevice();
 
     /**
      * @brief Destructor for Device.
