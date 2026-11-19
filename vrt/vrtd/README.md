@@ -113,6 +113,10 @@ is in flight makes that write record nothing.
 **Upgrades.** The design-write request grew with the UUID and the flags.
 vrtd rejects a shorter request with `VRTD_RET_BAD_REQUEST`, so the daemon and
 its clients (libvrtd, libvrtdpp, libvrt, v80-smi) must be upgraded together.
+The client libraries' ABI changed with it (`vrtd::Device` and the C
+design-write calls), so the stack is version 2 and the libraries'
+SONAMEs are `.so.2`. A program built against version 1 then fails to load
+instead of running with mismatched structures; rebuild it.
 
 The rules live in `src/design_state.c`, which does no I/O and is covered by
 `tests/design_state_test.cpp`. `src/serve.c` applies them.
