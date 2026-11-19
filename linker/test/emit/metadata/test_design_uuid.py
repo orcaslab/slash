@@ -21,6 +21,7 @@
 """Tests for the design UUID slashkit stamps into a vbin."""
 
 import io
+import os
 import sys
 import tarfile
 import uuid
@@ -218,11 +219,86 @@ def test_restamp_without_system_map_fails_and_keeps_the_vbin(tmp_path):
     vbin = _make_vbin(tmp_path / "design.vbin", system_map=None)
     before = vbin.read_bytes()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(du.VbinStampError, match="holds no system_map.xml"):
         du.restamp_vbin(vbin)
 
     assert vbin.read_bytes() == before
     assert sorted(p.name for p in tmp_path.iterdir()) == ["design.vbin"]
+
+
+def test_restamp_follows_a_symlink_to_the_real_vbin(tmp_path):
+    real_dir = tmp_path / "builds"
+    real_dir.mkdir()
+    vbin = _make_vbin(real_dir / "design.vbin")
+    link = tmp_path / "current.vbin"
+    link.symlink_to(vbin)
+
+    stamped = du.restamp_vbin(link)
+
+    # The link is still a link, and the file it points to carries the UUID.
+    assert link.is_symlink()
+    assert link.resolve() == vbin.resolve()
+    assert _vbin_uuid(vbin) == stamped
+    # The temporary file was made next to the real vbin, and is gone.
+    assert sorted(p.name for p in real_dir.iterdir()) == ["design.vbin"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["builds", "current.vbin"]
+
+
+def test_restamp_refuses_a_vbin_with_several_hard_links(tmp_path):
+    vbin = _make_vbin(tmp_path / "design.vbin")
+    other = tmp_path / "copy.vbin"
+    os.link(vbin, other)
+    before = vbin.read_bytes()
+
+    with pytest.raises(du.VbinStampError, match="2 hard links"):
+        du.restamp_vbin(vbin)
+
+    assert vbin.read_bytes() == before
+    assert other.read_bytes() == before
+    assert os.stat(vbin).st_nlink == 2
+
+
+def test_restamp_syncs_the_new_archive_before_renaming(tmp_path, monkeypatch):
+    vbin = _make_vbin(tmp_path / "design.vbin")
+    events = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def fsync(fd):
+        events.append(("fsync", os.path.basename(os.readlink(f"/proc/self/fd/{fd}"))))
+        real_fsync(fd)
+
+    def replace(src, dst):
+        events.append(("replace", os.path.basename(str(src))))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(du.os, "fsync", fsync)
+    monkeypatch.setattr(du.os, "replace", replace)
+
+    du.restamp_vbin(vbin)
+
+    kinds = [kind for kind, _ in events]
+    assert kinds == ["fsync", "replace", "fsync"]
+    # The file synced first is the one renamed over the vbin.
+    assert events[0][1] == events[1][1]
+    assert events[0][1].startswith("design.vbin.")
+    # Then the directory, so the rename itself is durable.
+    assert events[2][1] == tmp_path.name
+
+
+def test_restamp_of_a_file_that_is_not_a_vbin_fails_cleanly(tmp_path):
+    vbin = tmp_path / "design.vbin"
+    vbin.write_bytes(b"not a tar archive at all" * 100)
+
+    with pytest.raises(du.VbinStampError, match="not a vbin archive"):
+        du.restamp_vbin(vbin)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["design.vbin"]
+
+
+def test_restamp_of_a_missing_file_fails_cleanly(tmp_path):
+    with pytest.raises(du.VbinStampError, match="cannot open"):
+        du.restamp_vbin(tmp_path / "missing.vbin")
 
 
 # ---- link time ---------------------------------------------------------------
@@ -268,6 +344,37 @@ def test_every_linked_vbin_gets_its_own_uuid(tmp_path):
 
 
 # ---- command line -------------------------------------------------------------
+
+
+def test_stamp_uuid_command_reports_a_missing_system_map_in_one_line(
+        tmp_path, monkeypatch, capsys):
+    vbin = _make_vbin(tmp_path / "design.vbin", system_map=None)
+    monkeypatch.setattr(sys, "argv", ["slashkit", "stamp-uuid", str(vbin)])
+
+    with pytest.raises(SystemExit) as exit_info:
+        slashkit_main.main()
+
+    assert exit_info.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("\n") == 1
+    assert captured.err.startswith("slashkit stamp-uuid: error: ")
+    assert "holds no system_map.xml" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_stamp_uuid_command_reports_hard_links_in_one_line(tmp_path, monkeypatch, capsys):
+    vbin = _make_vbin(tmp_path / "design.vbin")
+    os.link(vbin, tmp_path / "copy.vbin")
+    monkeypatch.setattr(sys, "argv", ["slashkit", "stamp-uuid", str(vbin)])
+
+    with pytest.raises(SystemExit) as exit_info:
+        slashkit_main.main()
+
+    assert exit_info.value.code == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1
+    assert "hard links" in err
 
 
 def test_stamp_uuid_command_prints_the_new_uuid(tmp_path, monkeypatch, capsys):

@@ -22,6 +22,7 @@ import argparse
 import importlib.resources as resources
 import logging
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -38,7 +39,7 @@ from slashkit.emit.emu.tcl_gen import generate_emu_tcl
 from slashkit.emit.sim.project_gen import create_sim_project, build_sim_project
 from slashkit.emit.emu.project_gen import build_emu_project, package_emu_artifacts
 
-from slashkit.emit.metadata.design_uuid import restamp_vbin
+from slashkit.emit.metadata.design_uuid import VbinStampError, restamp_vbin
 from slashkit.emit.metadata.prog_image import build_vbin
 from slashkit.core.command_config import (
     LinkerConfiguration,
@@ -171,7 +172,11 @@ def static_shell_path(args) -> None:
 
 
 def stamp_uuid(args) -> None:
-    print(restamp_vbin(Path(args.vbin)))
+    try:
+        print(restamp_vbin(Path(args.vbin)))
+    except VbinStampError as e:
+        print(f"slashkit stamp-uuid: error: {e}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 MAIN_HELP_EPILOG = """

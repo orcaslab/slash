@@ -116,6 +116,10 @@ def _is_system_map(member: tarfile.TarInfo) -> bool:
     return member.isfile() and os.path.normpath(member.name) == SYSTEM_MAP_NAME
 
 
+class VbinStampError(Exception):
+    """! @brief A vbin cannot be given a new UUID."""
+
+
 def _is_gzip(path: Path) -> bool:
     with open(path, "rb") as f:
         return f.read(2) == b"\x1f\x8b"
@@ -128,13 +132,31 @@ def restamp_vbin(
 
     Rewrites the archive with a new UUID in its system_map.xml.  Every other
     member is copied unchanged.  The vbin is replaced only once the new
-    archive is complete.
+    archive is complete and on disk.
+
+    A symbolic link is followed: the file it points to is the one stamped,
+    and the link stays a link.  A vbin with more than one hard link is
+    refused: the rewrite replaces the file, so the other names would keep the
+    old contents and the old UUID.
 
     @param vbin_path The vbin to update in place.
     @param design_uuid UUID to stamp; a random one is drawn when omitted.
     @return The stamped UUID.
+    @throws VbinStampError when the vbin cannot be stamped.
     """
-    vbin_path = Path(vbin_path)
+    try:
+        vbin_path = Path(vbin_path).resolve(strict=True)
+    except OSError as e:
+        raise VbinStampError(f"cannot open {vbin_path}: {e.strerror}") from e
+
+    st = vbin_path.stat()
+    if st.st_nlink > 1:
+        raise VbinStampError(
+            f"{vbin_path} has {st.st_nlink} hard links; stamping replaces the "
+            f"file, so the other links would keep the old UUID. Copy the vbin "
+            f"and stamp the copy."
+        )
+
     if design_uuid is None:
         design_uuid = uuid.uuid4()
 
@@ -147,30 +169,47 @@ def restamp_vbin(
     try:
         stamped = False
         write_mode = "w:gz" if _is_gzip(vbin_path) else "w"
-        with tarfile.open(vbin_path, "r:*") as src, \
-                tarfile.open(tmp_path, write_mode) as dst:
-            for member in src:
-                if _is_system_map(member):
-                    if stamped:
-                        raise ValueError(
-                            f"{vbin_path} holds more than one {SYSTEM_MAP_NAME}"
-                        )
-                    xml_bytes, _ = stamp_system_map_xml(
-                        src.extractfile(member).read(), design_uuid
-                    )
-                    member.size = len(xml_bytes)
-                    dst.addfile(member, io.BytesIO(xml_bytes))
-                    stamped = True
-                elif member.isfile():
-                    dst.addfile(member, src.extractfile(member))
-                else:
-                    dst.addfile(member)
+        try:
+            with tarfile.open(vbin_path, "r:*") as src, \
+                    tarfile.open(tmp_path, write_mode) as dst:
+                for member in src:
+                    if _is_system_map(member):
+                        if stamped:
+                            raise VbinStampError(
+                                f"{vbin_path} holds more than one {SYSTEM_MAP_NAME}"
+                            )
+                        try:
+                            xml_bytes, _ = stamp_system_map_xml(
+                                src.extractfile(member).read(), design_uuid
+                            )
+                        except (ET.ParseError, ValueError) as e:
+                            raise VbinStampError(
+                                f"{SYSTEM_MAP_NAME} in {vbin_path} is not a "
+                                f"system map: {e}"
+                            ) from e
+                        member.size = len(xml_bytes)
+                        dst.addfile(member, io.BytesIO(xml_bytes))
+                        stamped = True
+                    elif member.isfile():
+                        dst.addfile(member, src.extractfile(member))
+                    else:
+                        dst.addfile(member)
+        except tarfile.TarError as e:
+            raise VbinStampError(f"{vbin_path} is not a vbin archive: {e}") from e
 
         if not stamped:
-            raise ValueError(f"{vbin_path} holds no {SYSTEM_MAP_NAME}")
+            raise VbinStampError(f"{vbin_path} holds no {SYSTEM_MAP_NAME}")
 
-        os.chmod(tmp_path, vbin_path.stat().st_mode & 0o7777)
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+        # The new contents must be on disk before the name points to them.
+        with open(tmp_path, "rb") as f:
+            os.fsync(f.fileno())
         os.replace(tmp_path, vbin_path)
+        dir_fd = os.open(vbin_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
