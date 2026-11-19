@@ -788,6 +788,9 @@ void cleanup_client(struct client *client)
 
     cleanup_client_device_state(client);
 
+    /* The merged role ensure_role() cached on the client is owned by it. */
+    cleanup_rolep(&client->role);
+
     gid_t_array_free(&client->gids);
 
     /* Close the inbound SCM_RIGHTS fd if one was received but not consumed. */
