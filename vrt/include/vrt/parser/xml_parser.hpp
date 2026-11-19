@@ -48,6 +48,7 @@ class XMLParser {
     uint64_t clockFrequency;                      ///< The clock frequency of the device.
     Platform platform;                            ///< The platform of the device.
     ShellType shellType;                          ///< The required hardware shell type.
+    DesignUuid uuid{};                            ///< UUID of the design; null if the file has none.
     std::vector<QdmaConnection> qdmaConnections;  ///< Vector of QDMA connections.
 
    public:
@@ -92,6 +93,12 @@ class XMLParser {
      * @return The shell type required by the design.
      */
     ShellType getShellType();
+
+    /**
+     * @brief Gets the UUID of the design.
+     * @return The UUID stamped by the linker, or the null UUID if there is none.
+     */
+    DesignUuid getUuid();
 
     /**
      * @brief Gets the vector of QDMA connections.

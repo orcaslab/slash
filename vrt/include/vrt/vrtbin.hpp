@@ -54,6 +54,7 @@ class Vrtbin {
     std::string utilizationReportPath;                              ///< Path to utilization report (if present)
     Platform platform;                                              ///< Platform type
     ShellType shellType;                                            ///< Required hardware shell type
+    DesignUuid uuid{};                                              ///< UUID of the design (null if none)
     /**
      * @brief Copies a file from source to destination.
      * @param source The source file path.
@@ -132,6 +133,15 @@ class Vrtbin {
      * @return The required shell type.
      */
     ShellType getShellType() const;
+
+    /**
+     * @brief Gets the UUID the linker stamped into the vbin.
+     *
+     * vrtd uses it to tell whether a device already holds this design.
+     *
+     * @return The UUID, or the null (all-zero) UUID if the vbin has none.
+     */
+    DesignUuid getUuid() const;
 
     /**
      * @brief Gets the path to the system map last loaded on a bdf.

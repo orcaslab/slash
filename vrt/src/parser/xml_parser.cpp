@@ -21,6 +21,7 @@
 #include <vrt/parser/xml_parser.hpp>
 
 #include <algorithm>
+#include <cctype>
 
 namespace vrt {
 
@@ -64,6 +65,40 @@ uint64_t parseU64(const std::string& text, uint64_t defaultValue = 0) {
         return defaultValue;
     }
     return static_cast<uint64_t>(std::stoull(text, nullptr, 0));
+}
+
+int hexDigit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// Parses a UUID in its canonical text form: 8-4-4-4-12 hex digits.
+DesignUuid parseUuid(const std::string& text) {
+    auto first = std::find_if_not(text.begin(), text.end(),
+                                  [](unsigned char c) { return std::isspace(c); });
+    auto last = std::find_if_not(text.rbegin(), text.rend(),
+                                 [](unsigned char c) { return std::isspace(c); }).base();
+    const std::string trimmed = first < last ? std::string(first, last) : std::string();
+
+    DesignUuid uuid{};
+    bool valid = trimmed.size() == 36;
+    std::size_t pos = 0;
+    for (std::size_t i = 0; valid && i < uuid.size(); ++i) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            valid = trimmed[pos++] == '-';
+        }
+        const int hi = hexDigit(trimmed[pos]);
+        const int lo = hexDigit(trimmed[pos + 1]);
+        valid = valid && hi >= 0 && lo >= 0;
+        uuid[i] = static_cast<uint8_t>((hi << 4) | lo);
+        pos += 2;
+    }
+    if (!valid) {
+        throw std::runtime_error("Invalid UUID in system map: '" + trimmed + "'");
+    }
+    return uuid;
 }
 
 bool parseBoolInt(const std::string& text, bool defaultValue = false) {
@@ -185,6 +220,9 @@ void XMLParser::parseXML() {
                 throw std::runtime_error("Unknown shell type");
             }
         } else if (kernelNode->type == XML_ELEMENT_NODE &&
+                   xmlStrcmp(kernelNode->name, BAD_CAST "UUID") == 0) {
+            this->uuid = parseUuid(getNodeContent(kernelNode));
+        } else if (kernelNode->type == XML_ELEMENT_NODE &&
                    xmlStrcmp(kernelNode->name, BAD_CAST "Qdma") == 0) {
             std::string kernelName, qdmaStream, syncTypeStr;
             uint32_t qid;
@@ -214,6 +252,8 @@ uint64_t XMLParser::getClockFrequency() { return this->clockFrequency; }
 Platform XMLParser::getPlatform() { return this->platform; }
 
 ShellType XMLParser::getShellType() { return this->shellType; }
+
+DesignUuid XMLParser::getUuid() { return this->uuid; }
 
 std::vector<QdmaConnection> XMLParser::getQdmaConnections() { return this->qdmaConnections; }
 

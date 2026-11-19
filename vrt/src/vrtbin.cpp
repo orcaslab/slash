@@ -264,6 +264,7 @@ Vrtbin::Vrtbin(std::string vrtbinPath, const std::string& bdf) {
     parser.parseXML();
     this->platform = parser.getPlatform();
     this->shellType = parser.getShellType();
+    this->uuid = parser.getUuid();
     copy(tempSystemMapPath.string(), systemMapPath);
 
     const std::filesystem::path reportPath =
@@ -482,6 +483,8 @@ std::string Vrtbin::getSimulationExec() { return simulationExecPath; }
 Platform Vrtbin::getPlatform() const { return platform; }
 
 ShellType Vrtbin::getShellType() const { return shellType; }
+
+DesignUuid Vrtbin::getUuid() const { return uuid; }
 
 void Vrtbin::discoverPdiFiles() {
     pdiPaths.clear();

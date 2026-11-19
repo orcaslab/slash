@@ -69,6 +69,30 @@ TEST_F(VrtbinEmuTest, NoPdiFilesForEmulation) {
     EXPECT_TRUE(vrtbin.getPdiPaths().empty());
 }
 
+TEST_F(VrtbinEmuTest, VbinWithoutUuidHasNullUuid) {
+    vrt::Vrtbin vrtbin(STUB_EMU_VBIN_PATH, "0000:00:00");
+    EXPECT_EQ(vrtbin.getUuid(), vrt::DesignUuid{});
+}
+
+TEST_F(VrtbinEmuTest, ExposesUuidOfSystemMap) {
+    const auto staging = tmpDir / "staging";
+    writeTempFile(staging, "system_map.xml", R"(<?xml version="1.0"?>
+<SystemMap>
+  <UUID>3f0c1a52-7d7e-4b0e-9a55-0c2f6d1e8b47</UUID>
+  <Platform>Emulation</Platform>
+</SystemMap>)");
+    const auto vbin = tmpDir / "stamped.vbin";
+    const std::string tar =
+        "tar cf '" + vbin.string() + "' -C '" + staging.string() + "' system_map.xml";
+    ASSERT_EQ(std::system(tar.c_str()), 0);
+
+    vrt::Vrtbin vrtbin(vbin.string(), "0000:00:00");
+
+    const vrt::DesignUuid expected = {0x3f, 0x0c, 0x1a, 0x52, 0x7d, 0x7e, 0x4b, 0x0e,
+                                      0x9a, 0x55, 0x0c, 0x2f, 0x6d, 0x1e, 0x8b, 0x47};
+    EXPECT_EQ(vrtbin.getUuid(), expected);
+}
+
 class VrtbinSimTest : public ::testing::Test {
    protected:
     std::filesystem::path tmpDir;

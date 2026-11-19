@@ -145,9 +145,16 @@ class Device {
     std::string getBdf();
 
     /**
-     * @brief Programs the device.
+     * @brief Programs the device with the vbin's PDIs.
+     *
+     * vrtd does not write a design the device already holds. Setting the
+     * environment variable VRT_FORCE_PROGRAM (non-empty and not "0") makes it
+     * write the design anyway.
+     *
+     * @return true if the PDIs were written, false if the design was already
+     *         loaded and nothing was written.
      */
-    void programDevice();
+    bool programDevice();
 
     /**
      * @brief Destructor for Device.

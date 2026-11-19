@@ -199,6 +199,52 @@ TEST_F(XMLParserTest, MissingShellTypeDefaultsToService) {
     EXPECT_EQ(parser.getShellType(), vrt::ShellType::SERVICE);
 }
 
+TEST_F(XMLParserTest, ParseUuid) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <UUID>12345678-9abc-DEF0-0123-456789abcdef</UUID>
+  <Platform>Hardware</Platform>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    const vrt::DesignUuid expected = {0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+                                      0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
+    EXPECT_EQ(parser.getUuid(), expected);
+}
+
+TEST_F(XMLParserTest, ParseUuidIgnoresSurroundingWhitespace) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <UUID>
+    00000000-0000-0000-0000-000000000001
+  </UUID>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    vrt::DesignUuid expected{};
+    expected[15] = 1;
+    EXPECT_EQ(parser.getUuid(), expected);
+}
+
+TEST_F(XMLParserTest, MissingUuidIsNull) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap><Platform>Hardware</Platform></SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    EXPECT_EQ(parser.getUuid(), vrt::DesignUuid{});
+}
+
+TEST_F(XMLParserTest, MalformedUuidThrows) {
+    for (const char* text : {"", "not-a-uuid", "123456789abcdef00123456789abcdef",
+                             "12345678-9abc-def0-0123-456789abcdeg",
+                             "12345678_9abc-def0-0123-456789abcdef",
+                             "12345678-9abc-def0-0123-456789abcdef0"}) {
+        auto path = writeXml(std::string("<SystemMap><UUID>") + text + "</UUID></SystemMap>");
+        vrt::XMLParser parser(path);
+        EXPECT_THROW(parser.parseXML(), std::runtime_error) << "UUID text: '" << text << "'";
+    }
+}
+
 TEST_F(XMLParserTest, ParseQdmaConnections) {
     auto path = writeXml(R"(<?xml version="1.0"?>
 <SystemMap>

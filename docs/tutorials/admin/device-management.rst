@@ -79,6 +79,17 @@ Load a vrtbin onto a board:
 This extracts the PDI bitstream from the vrtbin and programs the FPGA.
 The device BDF (``03:00``) can be found from ``v80-smi list``.
 
+Each vrtbin carries a UUID. If the board already holds the design with that
+UUID, nothing is written and the command returns at once. To program it
+anyway:
+
+.. code-block:: bash
+
+   VRT_FORCE_PROGRAM=1 v80-smi program my_design.vbin -d 03:00
+
+A design that another running application uses cannot be replaced: the
+command fails with a "busy" error until that application exits.
+
 Programming can also be done using VRT:
 
 .. code-block:: cpp
@@ -88,7 +99,11 @@ Programming can also be done using VRT:
 Querying the Active Design
 ==========================
 
-To see what was last programmed on a device:
+``v80-smi list`` shows, for each board, the UUID of the design vrtd wrote
+last and how many clients use it. Compare it with the ``<UUID>`` in a
+vrtbin's ``system_map.xml`` to tell whether that vrtbin is the loaded one.
+
+To see the metadata of what was last programmed on a device:
 
 .. code-block:: bash
 

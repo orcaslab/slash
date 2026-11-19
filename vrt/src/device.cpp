@@ -30,6 +30,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -121,6 +122,13 @@ vrtd::ShellType toVrtdShellType(ShellType shellType) {
     default:
         throw std::runtime_error("Unknown vbin shell type");
     }
+}
+
+// VRT_FORCE_PROGRAM, when non-empty and not "0", asks vrtd to write the design
+// even if the device already holds it.
+bool forceProgramRequested() {
+    const char* value = std::getenv("VRT_FORCE_PROGRAM");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
 bool parseEmuArgIndex(const std::string& argName, std::size_t& outIdx) {
@@ -251,11 +259,12 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     if (platform == Platform::HARDWARE) {
         vrtdSession = std::make_shared<vrtd::Session>();
         vrtdDevice = vrtdSession->getDeviceByBdf(bdfFull);
+        bool programmed = false;
         if (program) {
-            programDevice();
+            programmed = programDevice();
         }
         parseSystemMap();
-        if (program && !kernels.empty()) {
+        if (programmed && !kernels.empty()) {
             sleep(1); // wait for device to be ready after programming before accessing BAR
 
         }
@@ -384,7 +393,7 @@ void Device::cleanup() {
 
 std::string Device::getBdf() { return bdf; }
 
-void Device::programDevice() {
+bool Device::programDevice() {
     if (pdiPaths.empty() && !pdiPath.empty()) {
         pdiPaths.push_back(pdiPath);
     }
@@ -392,11 +401,30 @@ void Device::programDevice() {
         throw std::runtime_error("No PDI files found for programming");
     }
 
-    for (const auto& pdi : pdiPaths) {
+    // All PDIs of the vbin are one design: they carry the same UUID, and
+    // vrtd records the design as loaded once the last one is written.
+    const DesignUuid uuid = vrtbin.getUuid();
+    const uint8_t forceFlag = forceProgramRequested() ? vrtd::DesignWriteForce : 0;
+
+    for (std::size_t i = 0; i < pdiPaths.size(); ++i) {
+        const std::string& pdi = pdiPaths[i];
+        const bool last = i + 1 == pdiPaths.size();
+        const uint8_t flags = forceFlag | (last ? 0 : vrtd::DesignWriteMore);
+
         utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
                            "Programming PDI via vrtd design writer {}", pdi);
-        getVrtdDevice().designWriteFile(pdi, toVrtdShellType(requiredShell));
+        const bool skipped =
+            getVrtdDevice().designWriteFile(pdi, toVrtdShellType(requiredShell), uuid, flags);
+        if (skipped) {
+            // vrtd decides on the first PDI; the rest of the design is there too.
+            utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
+                               "Design {} is already loaded on {}; not programming",
+                               vrtd::toString(uuid), bdfFull);
+            return false;
+        }
     }
+
+    return true;
 }
 
 void Device::setFrequency(uint64_t freq) {

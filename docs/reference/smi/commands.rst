@@ -52,6 +52,12 @@ list
 
 Enumerate V80 boards visible on the system and report their readiness status.
 
+For each board that vrtd manages, the output shows the booted shell and the
+loaded design: the UUID of the vbin vrtd wrote last and the number of clients
+that use it, or ``unknown`` when vrtd does not know what the board holds
+(after a daemon start, a reset, or a failed write). In JSON these are
+``vrtd.design_uuid`` (``null`` when unknown) and ``vrtd.design_holders``.
+
 .. code-block:: text
 
    v80-smi list [-j|--json] [-J|--pretty-json] [-l|--long] [-s|--sensors]

@@ -26,6 +26,9 @@
 #ifndef VRT_PLATFORM_HPP
 #define VRT_PLATFORM_HPP
 
+#include <array>
+#include <cstdint>
+
 namespace vrt {
 /**
  * @brief Enum for execution platforms.
@@ -48,6 +51,13 @@ enum class ShellType {
     COMPUTE,  ///< Compute shell (flash partition 1)
     UNKNOWN   ///< Unknown or unspecified shell
 };
+
+/**
+ * @brief UUID of a design, stamped into the vbin by the linker.
+ *
+ * The all-zero value is the null UUID: the vbin carries no UUID.
+ */
+using DesignUuid = std::array<uint8_t, 16>;
 
 }  // namespace vrt
 
