@@ -39,6 +39,7 @@
 #include <slash/ctldev.h>
 #include <vrtd/wire.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -418,25 +419,69 @@ enum vrtd_ret vrtd_buffer_close(
 );
 
 /**
+ * @brief Get the design loaded on a device.
+ *
+ * Reports the UUID of the design the daemon wrote last and the number of
+ * client connections that hold a reference on it.  The UUID is all-zero when
+ * the daemon does not know what the device holds (after a daemon start, a
+ * reset, a failed write, or a write of a design without a UUID).
+ *
+ * @param fd          Connected vrtd socket file descriptor.
+ * @param dev         Device index (0‑based).
+ * @param info_out    Output design info (UUID + holder count).
+ *
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ * @pre @p info_out must not be NULL.
+ */
+enum vrtd_ret vrtd_get_design_info(
+    int fd,
+    uint32_t dev,
+    struct vrtd_design_info *info_out
+);
+
+/**
  * @brief Perform a design writer transfer for a device.
  *
  * The input FD is sent to the daemon via SCM_RIGHTS. On success the daemon
  * takes ownership of the FD and blocks until the transfer completes.
  *
+ * The daemon does not write a design the device already holds: when @p uuid
+ * is non-null and equal to the UUID of the loaded design, the call returns at
+ * once with @p skipped_out set.  #VRTD_DESIGN_WRITE_FORCE writes it anyway.
+ * In both cases this connection then holds a reference on the design until it
+ * is closed, and no other connection can replace the design meanwhile.
+ *
+ * The daemon parks the user clock before a write and when the last holder of
+ * a design disconnects, so set the design's clock rate after this call,
+ * skipped or not.
+ *
+ * A design made of several PDIs is written with one call per PDI, all with
+ * the same @p uuid and all but the last with #VRTD_DESIGN_WRITE_MORE.  If the
+ * first call is skipped, skip the others.
+ *
  * @param fd         Connected vrtd socket file descriptor.
  * @param dev        Device index (0‑based).
  * @param input_fd   Input file descriptor to read from.
  * @param required_shell Shell required by the design (enum vrtd_shell_type).
+ * @param uuid       UUID of the design (#VRTD_DESIGN_UUID_LEN bytes), or NULL
+ *                   if it has none.
+ * @param flags      Bitmask of enum vrtd_design_write_flags.
+ * @param skipped_out Set to true if the design was already loaded and nothing
+ *                   was written, to false otherwise. May be NULL.
  *
- * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress;
- *         otherwise a #vrtd_ret error code.
+ * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress
+ *         or another client holds the loaded design; otherwise a #vrtd_ret
+ *         error code.
  * @pre @p input_fd must be a valid, readable file descriptor.
  */
 enum vrtd_ret vrtd_design_write(
     int fd,
     uint32_t dev,
     int input_fd,
-    uint8_t required_shell
+    uint8_t required_shell,
+    const uint8_t *uuid,
+    uint8_t flags,
+    bool *skipped_out
 );
 
 /**
@@ -449,16 +494,25 @@ enum vrtd_ret vrtd_design_write(
  * @param dev        Device index (0‑based).
  * @param path       Path to the input file to transfer.
  * @param required_shell Shell required by the design (enum vrtd_shell_type).
+ * @param uuid       UUID of the design (#VRTD_DESIGN_UUID_LEN bytes), or NULL
+ *                   if it has none.
+ * @param flags      Bitmask of enum vrtd_design_write_flags.
+ * @param skipped_out Set to true if the design was already loaded and nothing
+ *                   was written, to false otherwise. May be NULL.
  *
- * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress;
- *         otherwise a #vrtd_ret error code.
+ * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress
+ *         or another client holds the loaded design; otherwise a #vrtd_ret
+ *         error code.
  * @pre @p path must not be NULL.
  */
 enum vrtd_ret vrtd_design_write_file(
     int fd,
     uint32_t dev,
     const char *path,
-    uint8_t required_shell
+    uint8_t required_shell,
+    const uint8_t *uuid,
+    uint8_t flags,
+    bool *skipped_out
 );
 
 /**

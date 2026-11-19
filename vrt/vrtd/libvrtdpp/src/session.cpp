@@ -160,9 +160,12 @@ Device Session::getDevice(size_t i) const {
         [&](const Device& device, HotplugOp op, uint8_t function) { return hotplugOp(device, op, function); },
         [&](const Device& device, ShellType shellType) { return resetSequence(device, shellType); },
         [&](const Device& device, ShellType shellType, bool jtag) { return setShellState(device, shellType, jtag); },
-        [&](const Device& device, int input_fd, ShellType requiredShell) { return designWrite(device, input_fd, requiredShell); },
-        [&](const Device& device, std::string_view path, ShellType requiredShell) {
-            return designWriteFile(device, path, requiredShell);
+        [&](const Device& device) { return getDesignInfo(device); },
+        [&](const Device& device, int input_fd, ShellType requiredShell, const DesignUuid& uuid, uint8_t flags) {
+            return designWrite(device, input_fd, requiredShell, uuid, flags);
+        },
+        [&](const Device& device, std::string_view path, ShellType requiredShell, const DesignUuid& uuid, uint8_t flags) {
+            return designWriteFile(device, path, requiredShell, uuid, flags);
         },
         [&](const Device& device, int input_fd, uint8_t bootDevice, uint32_t partition) {
             return cfgmemProgram(device, input_fd, bootDevice, partition);
@@ -237,9 +240,12 @@ Device Session::getDeviceByBdf(std::string_view bdf) const {
         [&](const Device& device, HotplugOp op, uint8_t function) { return hotplugOp(device, op, function); },
         [&](const Device& device, ShellType shellType) { return resetSequence(device, shellType); },
         [&](const Device& device, ShellType shellType, bool jtag) { return setShellState(device, shellType, jtag); },
-        [&](const Device& device, int input_fd, ShellType requiredShell) { return designWrite(device, input_fd, requiredShell); },
-        [&](const Device& device, std::string_view path, ShellType requiredShell) {
-            return designWriteFile(device, path, requiredShell);
+        [&](const Device& device) { return getDesignInfo(device); },
+        [&](const Device& device, int input_fd, ShellType requiredShell, const DesignUuid& uuid, uint8_t flags) {
+            return designWrite(device, input_fd, requiredShell, uuid, flags);
+        },
+        [&](const Device& device, std::string_view path, ShellType requiredShell, const DesignUuid& uuid, uint8_t flags) {
+            return designWriteFile(device, path, requiredShell, uuid, flags);
         },
         [&](const Device& device, int input_fd, uint8_t bootDevice, uint32_t partition) {
             return cfgmemProgram(device, input_fd, bootDevice, partition);
@@ -572,33 +578,61 @@ void Session::setShellState(const Device& device, ShellType shellType, bool jtag
     }
 }
 
-void Session::designWrite(const Device& device, int input_fd,
-                          ShellType requiredShell) const {
+DesignInfo Session::getDesignInfo(const Device& device) const {
     if (isClosed()) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
     std::lock_guard<std::mutex> lk(*m);
 
-    auto ret = vrtd_design_write(fd, device.getNum(), input_fd,
-                                 static_cast<uint8_t>(requiredShell));
+    vrtd_design_info raw = {};
+    auto ret = vrtd_get_design_info(fd, device.getNum(), &raw);
     if (ret != VRTD_RET_OK) {
         throw Error(ret);
     }
+
+    DesignInfo info;
+    memcpy(info.uuid.data(), raw.uuid, info.uuid.size());
+    info.numHolders = raw.num_holders;
+    return info;
 }
 
-void Session::designWriteFile(const Device& device, std::string_view path,
-                              ShellType requiredShell) const {
+bool Session::designWrite(const Device& device, int input_fd,
+                          ShellType requiredShell, const DesignUuid& uuid,
+                          uint8_t flags) const {
+    if (isClosed()) {
+        throw Error(VRTD_RET_BAD_LIB_CALL);
+    }
+    std::lock_guard<std::mutex> lk(*m);
+
+    bool skipped = false;
+    auto ret = vrtd_design_write(fd, device.getNum(), input_fd,
+                                 static_cast<uint8_t>(requiredShell),
+                                 uuid.data(), flags, &skipped);
+    if (ret != VRTD_RET_OK) {
+        throw Error(ret);
+    }
+
+    return skipped;
+}
+
+bool Session::designWriteFile(const Device& device, std::string_view path,
+                              ShellType requiredShell, const DesignUuid& uuid,
+                              uint8_t flags) const {
     if (isClosed()) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
     std::lock_guard<std::mutex> lk(*m);
 
     std::string path_str(path);
+    bool skipped = false;
     auto ret = vrtd_design_write_file(fd, device.getNum(), path_str.c_str(),
-                                      static_cast<uint8_t>(requiredShell));
+                                      static_cast<uint8_t>(requiredShell),
+                                      uuid.data(), flags, &skipped);
     if (ret != VRTD_RET_OK) {
         throw Error(ret);
     }
+
+    return skipped;
 }
 
 void Session::cfgmemProgram(

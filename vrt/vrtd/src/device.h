@@ -44,6 +44,7 @@
 
 #include "array.h"
 #include "buffer.h"
+#include "design_state.h"
 
 struct design_writer;
 struct clock_driver;
@@ -53,7 +54,8 @@ struct device_memory_map;
  * @brief Represents a single discovered SLASH FPGA device.
  *
  * Owns all per-device resources: libslash handles, BAR mappings, subsystem
- * drivers, DMA buffers, and the HBM/DDR memory map allocator.
+ * drivers, DMA buffers, the HBM/DDR memory map allocator, and the record of
+ * the loaded design.
  */
 struct device {
     /** @brief Sysfs path of this device (e.g. "/sys/bus/pci/devices/0000:03:00.0").
@@ -73,9 +75,10 @@ struct device {
     struct design_writer *design_writer;
     /** @brief Clock frequency control subsystem via AXI clock wizard (owning, may be NULL). */
     struct clock_driver *clock_driver;
-    /** @brief Connection whose design write loaded the current design; valid when design_owner_valid. */
-    uint64_t design_owner_conn;
-    bool design_owner_valid;
+    /** @brief UUID of the loaded design and the connections that hold it (owning).
+     *  Lives and dies with this struct, so a device that is rediscovered after a
+     *  reset starts with no known design. */
+    struct design_state design;
     /** @brief A design write failed: the card must be reset before the next one. */
     bool needs_reset;
     /** @brief HBM/DDR address-range allocator for DMA buffer placement (owning, may be NULL). */

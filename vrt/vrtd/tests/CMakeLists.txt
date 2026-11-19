@@ -30,8 +30,13 @@ add_vrtd_test(config_test config_test.cpp)
 add_vrtd_test(auth_test auth_test.cpp)
 add_vrtd_test(buffer_test buffer_test.cpp)
 add_vrtd_test(v80_policy_test v80_policy_test.cpp)
+add_vrtd_test(design_state_test design_state_test.cpp)
 add_vrtd_test(design_writer_test design_writer_test.cpp)
 add_vrtd_test(device_test device_test.cpp)
 add_vrtd_test(flash_worker_test flash_worker_test.cpp)
 add_vrtd_test(reset_test reset_test.cpp)
 add_vrtd_test(clock_test clock_test.cpp)
+
+# Runs the daemon's request code in-process and talks to it with the client library.
+add_vrtd_test(serve_design_test serve_design_test.cpp)
+target_link_libraries(serve_design_test PRIVATE vrtd::libvrtd)

@@ -66,6 +66,20 @@ int auth_request_get_device_info(
 );
 
 /**
+ * @brief Authorize a GET_DESIGN_INFO request.
+ *
+ * Checks that the client's role permits querying devices.
+ *
+ * @param client   The requesting client (carries the role and response buffer).
+ * @param req_body The parsed request body containing the target device index.
+ * @return 1 if authorized, 0 if denied, -1 on internal error.
+ */
+int auth_request_get_design_info(
+    struct client *client,
+    const struct vrtd_req_get_design_info *req_body
+);
+
+/**
  * @brief Authorize a GET_DEVICE_BY_BDF request.
  *
  * Checks that the client's role permits querying devices by PCI

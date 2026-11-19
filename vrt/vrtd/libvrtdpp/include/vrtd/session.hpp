@@ -343,15 +343,28 @@ private:
     void setShellState(const Device& device, ShellType shellType, bool jtag) const;
 
     /**
+     * @internal Query the design loaded on a device.
+     *
+     * @param device Device to query.
+     * @return Loaded design UUID and holder count.
+     * @throws vrtd::Error on error.
+     */
+    DesignInfo getDesignInfo(const Device& device) const;
+
+    /**
      * @internal Perform a design writer transfer using an input FD.
      *
      * @param device   Device owning the design writer.
      * @param input_fd Input file descriptor to transfer from.
      * @param requiredShell Hardware shell required by the design.
+     * @param uuid     UUID of the design; null if it has none.
+     * @param flags    Bitmask of DesignWriteForce and DesignWriteMore.
+     * @return true if the design was already loaded and nothing was written.
      * @throws vrtd::Error on error.
      */
-    void designWrite(const Device& device, int input_fd,
-                     ShellType requiredShell) const;
+    bool designWrite(const Device& device, int input_fd,
+                     ShellType requiredShell, const DesignUuid& uuid,
+                     uint8_t flags) const;
 
     /**
      * @internal Perform a design writer transfer using a file path.
@@ -359,10 +372,14 @@ private:
      * @param device Device owning the design writer.
      * @param path   Input file path to transfer from.
      * @param requiredShell Hardware shell required by the design.
+     * @param uuid   UUID of the design; null if it has none.
+     * @param flags  Bitmask of DesignWriteForce and DesignWriteMore.
+     * @return true if the design was already loaded and nothing was written.
      * @throws vrtd::Error on error.
      */
-    void designWriteFile(const Device& device, std::string_view path,
-                         ShellType requiredShell) const;
+    bool designWriteFile(const Device& device, std::string_view path,
+                         ShellType requiredShell, const DesignUuid& uuid,
+                         uint8_t flags) const;
 
     /**
      * @internal Program a PDI into cfgmem using an input FD.

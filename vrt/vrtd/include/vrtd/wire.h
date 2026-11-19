@@ -124,6 +124,9 @@ enum vrtd_opcode {
 
     /** Allocate host memory a kernel's AXI master can reach; returns an fd via SCM_RIGHTS. */
     VRTD_REQ_HOST_BUFFER_ALLOC,
+
+    /** Query the UUID of the design loaded on a device and how many clients hold it. */
+    VRTD_REQ_GET_DESIGN_INFO,
 };
 
 /**
@@ -408,17 +411,67 @@ enum vrtd_shell_type {
 };
 
 /**
+ * @brief Size of a design UUID in bytes.
+ *
+ * The linker stamps a random UUID into every vbin.  The all-zero UUID is the
+ * null UUID: a design without an identity, or a loaded design vrtd does not
+ * know.
+ */
+#define VRTD_DESIGN_UUID_LEN 16
+
+/**
+ * @brief Flags of a design write request.
+ */
+enum vrtd_design_write_flags {
+    /** Write the design even when the device already holds it. */
+    VRTD_DESIGN_WRITE_FORCE = 1 << 0,
+    /** More PDIs of the same design follow in later requests. */
+    VRTD_DESIGN_WRITE_MORE = 1 << 1,
+};
+
+/**
  * @brief Request a design writer transfer.
  *
  * The input file descriptor is sent out-of-band via SCM_RIGHTS.
+ *
+ * The daemon remembers the UUID of the design it wrote last.  A request that
+ * carries the same non-null UUID is answered without writing, unless
+ * VRTD_DESIGN_WRITE_FORCE is set, the device needs a reset, or the request
+ * needs another shell.  The client whose request wrote the design, and every
+ * client whose request was skipped, holds a reference on the design until it
+ * disconnects.  A request that would replace a design another client holds
+ * fails with VRTD_RET_BUSY.  When the last holder disconnects the daemon parks
+ * the user clock; the design stays loaded.
+ *
+ * A design made of several PDIs is written with one request per PDI, all with
+ * the same UUID and all but the last with VRTD_DESIGN_WRITE_MORE.  Only the
+ * first request can be skipped; the client then skips the rest.
  */
 struct vrtd_req_design_write {
     uint32_t dev_number; ///< Device index (0-based).
     uint8_t required_shell; ///< One of vrtd_shell_type.
+    uint8_t flags; ///< Bitmask of vrtd_design_write_flags.
+    uint8_t uuid[VRTD_DESIGN_UUID_LEN]; ///< UUID of the design; all-zero if it has none.
 } __attribute__((packed));
 
 struct vrtd_resp_design_write {
-    uint8_t zero; ///< Placeholder; all data is carried via SCM_RIGHTS.
+    uint8_t skipped; ///< Non-zero if the design was already loaded and nothing was written.
+} __attribute__((packed));
+
+/**
+ * @brief Request the loaded design of a device.
+ */
+struct vrtd_req_get_design_info {
+    uint32_t dev_number; ///< Device index (0-based).
+} __attribute__((packed));
+
+struct vrtd_design_info {
+    uint8_t uuid[VRTD_DESIGN_UUID_LEN]; ///< UUID of the loaded design; all-zero if unknown.
+    uint32_t num_holders; ///< Number of client connections holding a reference on the design.
+} __attribute__((packed));
+
+struct vrtd_resp_get_design_info {
+    struct vrtd_design_info info;
 } __attribute__((packed));
 
 /**

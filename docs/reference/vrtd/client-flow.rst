@@ -197,6 +197,34 @@ showing the C and C++ entry points side-by-side.
   - Raw pointer: ``bf.getRawPtr(offset)`` — caller must manually bracket with
     ``slash_bar_file_start_*`` / ``_end_*``.
 
+7) Program a Design
+-------------------
+
+- **C**: ``vrtd_design_write_file(fd, dev, "design.pdi", shell, uuid, flags, &skipped)``
+  or ``vrtd_design_write()`` with an open file descriptor.
+
+- **C++**: ``bool skipped = d.designWriteFile("design.pdi", shell, uuid, flags);``
+
+``uuid`` is the 16-byte UUID the linker stamped into the vbin (``<UUID>`` in
+``system_map.xml``); pass a null UUID if the design has none. vrtd remembers
+the UUID of the design it wrote last on each device:
+
+- If the device already holds the design, nothing is written and ``skipped``
+  is true. ``VRTD_DESIGN_WRITE_FORCE`` (C++: ``vrtd::DesignWriteForce``) writes
+  it anyway.
+- The connection that wrote the design, and every connection whose write was
+  skipped, holds a reference on it until it closes. While another connection
+  holds a reference, a write that would replace the design fails with
+  ``VRTD_RET_BUSY``.
+- A design made of several PDIs is written with one call per PDI, all with the
+  same UUID and all but the last with ``VRTD_DESIGN_WRITE_MORE`` (C++:
+  ``vrtd::DesignWriteMore``). If the first call is skipped, skip the others.
+
+``vrtd_get_design_info(fd, dev, &info)`` (C++: ``d.getDesignInfo()``) returns
+the UUID of the loaded design and the number of connections that hold it. The
+UUID is all-zero when vrtd does not know what the device holds: after a daemon
+start, a reset, a failed write, or a write of a design without a UUID.
+
 Error Model
 ===========
 
@@ -217,6 +245,8 @@ Common return codes:
 - ``VRTD_RET_NOEXIST`` — resource does not exist (e.g. out-of-range index).
 - ``VRTD_RET_INTERNAL_ERROR`` — daemon-side failure; check vrtd logs.
 - ``VRTD_RET_AUTH_ERROR`` — permission denied by role configuration.
+- ``VRTD_RET_BUSY`` — resource busy (e.g. a design write is in progress, or
+  another client holds the loaded design).
 
 Thread Safety
 =============

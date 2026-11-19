@@ -90,8 +90,6 @@ struct client {
     bool pending_design_write;
     /** @brief The device on which the pending asynchronous design write is running (non-owning). */
     struct device *pending_design_write_device;
-    /** @brief BDF of the device whose current design this client loaded (empty if none). */
-    char owned_design_bdf[VRTD_PCI_BDF_LEN];
     /** @brief True while an asynchronous device operation is in progress for this client. */
     bool pending_async_device_op;
 

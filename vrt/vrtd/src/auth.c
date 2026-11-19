@@ -43,9 +43,9 @@
  *     the connection.
  *
  * Authorization check categories:
- *   - **Query-only** operations (get_device_info, get_device_by_bdf,
- *     get_num_devices, get_bar_info, qdma_get_info): require only the
- *     `query` permission.
+ *   - **Query-only** operations (get_device_info, get_design_info,
+ *     get_device_by_bdf, get_num_devices, get_bar_info, qdma_get_info):
+ *     require only the `query` permission.
  *   - **Device-access** operations (get_bar_fd, qdma_qpair_add/op/get_fd,
  *     buffer_open/close, design_write, clock_op): require `query` plus
  *     the corresponding per-device per-subsystem permission (bar, qdma,
@@ -383,6 +383,36 @@ int auth_request_get_device_info(
         return 1;
     } else {
         auth_log_denied(client, "get_device_info", "query");
+        return 0;
+    }
+}
+
+/**
+ * @brief Authorize a get_design_info request.
+ *
+ * Requires: query permission.
+ *
+ * @param client    The requesting client.
+ * @param req_body  The request payload (unused for auth, present for signature consistency).
+ * @return 1 if authorized, 0 if denied, <0 on internal error.
+ */
+int auth_request_get_design_info(
+    struct client *client,
+    const struct vrtd_req_get_design_info *req_body
+)
+{
+    assert(client != NULL);
+    assert(req_body != NULL);
+
+    int ret = ensure_role(client);
+    PROPAGATE_ERROR(ret);
+
+    assert(client->role != NULL);
+
+    if (client->role->query) {
+        return 1;
+    } else {
+        auth_log_denied(client, "get_design_info", "query");
         return 0;
     }
 }

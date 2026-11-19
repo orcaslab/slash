@@ -315,6 +315,8 @@ static int device_open(struct device **out, const char *path)
 
     d->current_shell = VRTD_SHELL_UNKNOWN;
     d->jtag = false;
+    /* A device that was just opened holds a design vrtd knows nothing about. */
+    d->design = design_state_init();
 
     d->path = strdup(path);
     PROPAGATE_ERROR_NULL_STDC_LOG(d->path, LOG_ERR, "Failed to allocate memory for device data");
@@ -535,6 +537,8 @@ void cleanup_device(struct device *d)
         cleanup_clock_driver(d->clock_driver);
         d->clock_driver = NULL;
     }
+
+    cleanup_design_state(&d->design);
 
     if (d->qdma != NULL) {
         if (slash_qdma_close(d->qdma) != 0) {

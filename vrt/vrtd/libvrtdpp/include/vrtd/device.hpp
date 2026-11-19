@@ -21,6 +21,7 @@
 #ifndef VRTD_DEVICE_HPP
 #define VRTD_DEVICE_HPP
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -54,6 +55,35 @@ enum class ShellType : uint8_t {
     Unknown = VRTD_SHELL_UNKNOWN,
     Service = VRTD_SHELL_SERVICE,
     Compute = VRTD_SHELL_COMPUTE,
+};
+
+/**
+ * @brief UUID of a design. The all-zero value is the null UUID: a design
+ *        without an identity, or a loaded design vrtd does not know.
+ */
+using DesignUuid = std::array<uint8_t, VRTD_DESIGN_UUID_LEN>;
+
+/// Design write flag: write the design even when the device already holds it.
+inline constexpr uint8_t DesignWriteForce = VRTD_DESIGN_WRITE_FORCE;
+/// Design write flag: more PDIs of the same design follow in later calls.
+inline constexpr uint8_t DesignWriteMore = VRTD_DESIGN_WRITE_MORE;
+
+/**
+ * @brief Tell whether a UUID is the null UUID.
+ */
+bool isNull(const DesignUuid& uuid) noexcept;
+
+/**
+ * @brief Format a UUID in its canonical text form (8-4-4-4-12 lowercase hex).
+ */
+std::string toString(const DesignUuid& uuid);
+
+/**
+ * @brief The design loaded on a device, returned by Device::getDesignInfo().
+ */
+struct DesignInfo {
+    DesignUuid uuid{};       ///< UUID of the loaded design; null if vrtd does not know it.
+    uint32_t numHolders = 0; ///< Client connections that hold a reference on the design.
 };
 
 /**
@@ -283,23 +313,55 @@ public:
     void setShellState(ShellType shellType, bool jtag) const;
 
     /**
+     * @brief Query the design loaded on this device.
+     *
+     * @return UUID of the design vrtd wrote last (null if unknown) and the
+     *         number of clients that hold a reference on it.
+     * @throws vrtd::Error on error.
+     */
+    DesignInfo getDesignInfo() const;
+
+    /**
      * @brief Perform a design writer transfer using an input file descriptor.
      *
      * The daemon takes ownership of the FD and blocks until the transfer completes.
      *
-     * @throws vrtd::Error on error.
+     * vrtd does not write a design the device already holds: when @p uuid is
+     * non-null and equal to the UUID of the loaded design, nothing is written,
+     * unless @p flags contains DesignWriteForce.  Either way the session then
+     * holds a reference on the design until it is closed; while it does, no
+     * other client can replace the design.
+     *
+     * vrtd parks the user clock before a write and when the last holder of a
+     * design disconnects, so set the design's clock rate after this call,
+     * skipped or not.
+     *
+     * A design made of several PDIs is written with one call per PDI, all with
+     * the same @p uuid and all but the last with DesignWriteMore.  If the
+     * first call returns true, skip the others.
+     *
+     * @param input_fd      Input file descriptor to transfer from.
+     * @param requiredShell Hardware shell required by the design.
+     * @param uuid          UUID of the design; null if it has none.
+     * @param flags         Bitmask of DesignWriteForce and DesignWriteMore.
+     * @return true if the design was already loaded and nothing was written.
+     * @throws vrtd::Error on error; VRTD_RET_BUSY if another client holds the
+     *         loaded design.
      */
-    void designWrite(int input_fd, ShellType requiredShell = ShellType::Service) const;
+    bool designWrite(int input_fd, ShellType requiredShell = ShellType::Service,
+                     const DesignUuid& uuid = {}, uint8_t flags = 0) const;
 
     /**
      * @brief Perform a design writer transfer from a file path.
      *
      * Convenience helper that opens the path and passes the FD to the daemon.
+     * See designWrite() for the parameters and the return value.
      *
      * @throws vrtd::Error on error.
      */
-    void designWriteFile(std::string_view path,
-                         ShellType requiredShell = ShellType::Service) const;
+    bool designWriteFile(std::string_view path,
+                         ShellType requiredShell = ShellType::Service,
+                         const DesignUuid& uuid = {}, uint8_t flags = 0) const;
 
     /**
      * @brief Program a PDI into cfgmem and reset into the programmed partition.
@@ -411,8 +473,9 @@ private:
            std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp,
            std::function<void(const Device&, ShellType)> fResetSequence,
            std::function<void(const Device&, ShellType, bool)> fSetShellState,
-           std::function<void(const Device&, int, ShellType)> fDesignWrite,
-           std::function<void(const Device&, std::string_view, ShellType)> fDesignWriteFile,
+           std::function<DesignInfo(const Device&)> fGetDesignInfo,
+           std::function<bool(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite,
+           std::function<bool(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile,
            std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
            std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
            std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
@@ -436,8 +499,9 @@ private:
     std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp;
     std::function<void(const Device&, ShellType)> fResetSequence;
     std::function<void(const Device&, ShellType, bool)> fSetShellState;
-    std::function<void(const Device&, int, ShellType)> fDesignWrite;
-    std::function<void(const Device&, std::string_view, ShellType)> fDesignWriteFile;
+    std::function<DesignInfo(const Device&)> fGetDesignInfo;
+    std::function<bool(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite;
+    std::function<bool(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile;
     std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram;
     std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile;
     std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate;

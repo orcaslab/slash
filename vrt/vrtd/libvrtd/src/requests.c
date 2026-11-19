@@ -701,13 +701,43 @@ enum vrtd_ret vrtd_buffer_open_raw(
     return VRTD_RET_OK;
 }
 
+enum vrtd_ret vrtd_get_design_info(int fd, uint32_t dev, struct vrtd_design_info *info_out)
+{
+    if (info_out == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    struct vrtd_req_get_design_info req = {
+        .dev_number = dev,
+    };
+    struct vrtd_resp_get_design_info resp = {0};
+    int ret = vrtd_raw_request(fd, VRTD_REQ_GET_DESIGN_INFO,
+                              &req, sizeof(req),
+                              &resp, sizeof(resp),
+                              NULL, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    memcpy(info_out, &resp.info, sizeof(*info_out));
+
+    return VRTD_RET_OK;
+}
+
 enum vrtd_ret vrtd_design_write(
     int fd,
     uint32_t dev,
     int input_fd,
-    uint8_t required_shell
+    uint8_t required_shell,
+    const uint8_t *uuid,
+    uint8_t flags,
+    bool *skipped_out
 )
 {
+    if (skipped_out != NULL) {
+        *skipped_out = false;
+    }
+
     if (input_fd < 0) {
         return VRTD_RET_BAD_LIB_CALL;
     }
@@ -715,7 +745,11 @@ enum vrtd_ret vrtd_design_write(
     struct vrtd_req_design_write req = {
         .dev_number = dev,
         .required_shell = required_shell,
+        .flags = flags,
     };
+    if (uuid != NULL) {
+        memcpy(req.uuid, uuid, sizeof(req.uuid));
+    }
     struct vrtd_resp_design_write resp = {0};
 
     int ret = vrtd_raw_request(fd, VRTD_REQ_DESIGN_WRITE,
@@ -726,6 +760,10 @@ enum vrtd_ret vrtd_design_write(
         return ret;
     }
 
+    if (skipped_out != NULL) {
+        *skipped_out = resp.skipped != 0;
+    }
+
     return VRTD_RET_OK;
 }
 
@@ -733,9 +771,16 @@ enum vrtd_ret vrtd_design_write_file(
     int fd,
     uint32_t dev,
     const char *path,
-    uint8_t required_shell
+    uint8_t required_shell,
+    const uint8_t *uuid,
+    uint8_t flags,
+    bool *skipped_out
 )
 {
+    if (skipped_out != NULL) {
+        *skipped_out = false;
+    }
+
     if (path == NULL) {
         return VRTD_RET_BAD_LIB_CALL;
     }
@@ -745,7 +790,8 @@ enum vrtd_ret vrtd_design_write_file(
         return VRTD_RET_BAD_LIB_CALL;
     }
 
-    enum vrtd_ret ret = vrtd_design_write(fd, dev, input_fd, required_shell);
+    enum vrtd_ret ret = vrtd_design_write(fd, dev, input_fd, required_shell,
+                                          uuid, flags, skipped_out);
     (void) close(input_fd);
     return ret;
 }

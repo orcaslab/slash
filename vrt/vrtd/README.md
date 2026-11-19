@@ -25,12 +25,65 @@ Key responsibilities:
 - Sysfs-based automatic device discovery at startup
 - Per-client DMA buffer management (HBM and DDR) with automatic
   cleanup on disconnect
-- FPGA bitstream programming via the design writer subsystem
+- FPGA bitstream programming via the design writer subsystem, skipping
+  designs that are already loaded
 - Clock frequency control via AXI clock wizard
 - PCIe hotplug (secondary bus reset) support
 - Role-based access control with per-device granularity
 - Systemd integration: socket activation, watchdog, sd-event loop,
   journal logging
+
+## Design writes
+
+A client programs a design by sending `VRTD_REQ_DESIGN_WRITE` with a file
+descriptor of the PDI. vrtd parks the user clock, transfers the PDI to the
+card and refreshes PF2. Every design write on a card goes through vrtd, so
+vrtd knows which design the card holds and does not write it twice.
+
+**Design UUID.** `slashkit` stamps a random UUID into each vbin
+(`<UUID>` in `system_map.xml`). The request carries it. For each device vrtd
+keeps the UUID of the loaded design. The all-zero UUID means unknown.
+
+| Event | Loaded UUID |
+|-------|-------------|
+| Daemon start | unknown |
+| Device object rebuilt (reset sequence, shell switch, remove + rescan) | unknown |
+| Bus reset or hotplug of a function, cfgmem program, `SET_SHELL_STATE` | unknown |
+| Design write accepted, transfer not finished | unknown |
+| Design write failed or interrupted | unknown |
+| Design write completed | UUID of the request (unknown if the request has none) |
+
+**Skip.** A request whose UUID is non-null and equal to the loaded UUID is
+answered at once with `skipped` set in the response. Nothing is written, the
+clock is not parked and PF2 is not refreshed. A request is never skipped when
+it carries `VRTD_DESIGN_WRITE_FORCE`, when it needs another shell, or when the
+card needs a reset.
+
+**References.** The client whose request wrote the design, and every client
+whose request was skipped, holds a reference on the design until its
+connection closes. When the last holder disconnects, vrtd parks the user
+clock; the design stays loaded and known.
+
+**In use.** A request that would replace the design (another UUID, no UUID, or
+`VRTD_DESIGN_WRITE_FORCE`) is refused with `VRTD_RET_BUSY` while a connection
+other than the requester holds a reference. The log names the holder. A client
+that is the only holder may replace its own design.
+
+**Several PDIs.** A vbin with several PDIs is one design. The client sends one
+request per PDI with the same UUID and sets `VRTD_DESIGN_WRITE_MORE` on all
+but the last. vrtd records the UUID when a request without that flag
+completes. Only the first request can be skipped; the client then skips the
+rest.
+
+**Query.** `VRTD_REQ_GET_DESIGN_INFO` returns the loaded UUID and the number of
+holders. `v80-smi list` shows both.
+
+vrtd cannot see a design that was loaded behind its back (for example over
+JTAG while the daemon keeps running). After such a load, report it with
+`SET_SHELL_STATE`, restart the daemon, or force the next write.
+
+The rules live in `src/design_state.c`, which does no I/O and is covered by
+`tests/design_state_test.cpp`. `src/serve.c` applies them.
 
 ## Directory layout
 

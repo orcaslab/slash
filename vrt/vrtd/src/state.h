@@ -56,10 +56,11 @@ struct vrtd {
     bool async_device_op_in_progress;
 
     /**
-     * @brief Client connection IDs whose buffer cleanup is deferred while an
-     * async device operation owns @ref devices from the worker thread.
+     * @brief Client connection IDs whose device state (buffers, references on
+     * loaded designs) is released later, because an async device operation
+     * owns @ref devices from the worker thread.
      */
-    struct uint64_array deferred_buffer_cleanup_conn_ids;
+    struct uint64_array deferred_cleanup_conn_ids;
 };
 
 #endif // VRTD_STATE_H

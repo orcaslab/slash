@@ -147,6 +147,21 @@ TEST_F(AuthTest, GetDeviceInfoAllowed) {
     EXPECT_EQ(auth_request_get_device_info(&cl, &req), 1);
 }
 
+TEST_F(AuthTest, GetDesignInfoAllowedWithQuery) {
+    assignRole(info_role);
+    struct vrtd_req_get_design_info req{};
+    req.dev_number = 0;
+    EXPECT_EQ(auth_request_get_design_info(&cl, &req), 1);
+}
+
+TEST_F(AuthTest, GetDesignInfoDeniedWithoutQuery) {
+    struct role *empty = nullptr;
+    ASSERT_EQ(role_merge_new(&empty, "empty"), 0);
+    cl.role = empty;
+    struct vrtd_req_get_design_info req{};
+    EXPECT_EQ(auth_request_get_design_info(&cl, &req), 0);
+}
+
 TEST_F(AuthTest, GetDeviceByBdfAllowed) {
     assignRole(info_role);
     struct vrtd_req_get_device_by_bdf req{};

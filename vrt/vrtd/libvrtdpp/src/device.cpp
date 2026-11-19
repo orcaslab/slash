@@ -20,7 +20,27 @@
 
 #include <vrtd/device.hpp>
 
+#include <algorithm>
+#include <cstdio>
+
 namespace vrtd {
+
+bool isNull(const DesignUuid& uuid) noexcept {
+    return std::all_of(uuid.begin(), uuid.end(), [](uint8_t b) { return b == 0; });
+}
+
+std::string toString(const DesignUuid& uuid) {
+    char text[37];
+    std::snprintf(
+        text, sizeof(text),
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        uuid[0], uuid[1], uuid[2], uuid[3],
+        uuid[4], uuid[5],
+        uuid[6], uuid[7],
+        uuid[8], uuid[9],
+        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
+    return text;
+}
 
 Device::Device(uint32_t num,
                std::string_view name,
@@ -38,8 +58,9 @@ Device::Device(uint32_t num,
                std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp,
                std::function<void(const Device&, ShellType)> fResetSequence,
                std::function<void(const Device&, ShellType, bool)> fSetShellState,
-               std::function<void(const Device&, int, ShellType)> fDesignWrite,
-               std::function<void(const Device&, std::string_view, ShellType)> fDesignWriteFile,
+               std::function<DesignInfo(const Device&)> fGetDesignInfo,
+               std::function<bool(const Device&, int, ShellType, const DesignUuid&, uint8_t)> fDesignWrite,
+               std::function<bool(const Device&, std::string_view, ShellType, const DesignUuid&, uint8_t)> fDesignWriteFile,
                std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
                std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
                std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
@@ -61,6 +82,7 @@ Device::Device(uint32_t num,
     this->fHotplugOp = fHotplugOp;
     this->fResetSequence = fResetSequence;
     this->fSetShellState = fSetShellState;
+    this->fGetDesignInfo = fGetDesignInfo;
     this->fDesignWrite = fDesignWrite;
     this->fDesignWriteFile = fDesignWriteFile;
     this->fCfgmemProgram = fCfgmemProgram;
@@ -141,12 +163,18 @@ void Device::setShellState(ShellType shellType, bool jtag) const {
     fSetShellState(*this, shellType, jtag);
 }
 
-void Device::designWrite(int input_fd, ShellType requiredShell) const {
-    fDesignWrite(*this, input_fd, requiredShell);
+DesignInfo Device::getDesignInfo() const {
+    return fGetDesignInfo(*this);
 }
 
-void Device::designWriteFile(std::string_view path, ShellType requiredShell) const {
-    fDesignWriteFile(*this, path, requiredShell);
+bool Device::designWrite(int input_fd, ShellType requiredShell,
+                         const DesignUuid& uuid, uint8_t flags) const {
+    return fDesignWrite(*this, input_fd, requiredShell, uuid, flags);
+}
+
+bool Device::designWriteFile(std::string_view path, ShellType requiredShell,
+                             const DesignUuid& uuid, uint8_t flags) const {
+    return fDesignWriteFile(*this, path, requiredShell, uuid, flags);
 }
 
 void Device::cfgmemProgram(int input_fd, uint8_t bootDevice, uint32_t partition) const {

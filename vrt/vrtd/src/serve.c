@@ -74,6 +74,11 @@
  *         pending_design_write = false
  *   4. EPOLLOUT fires -> client_handle_out()  -> have_response = false
  *
+ * A DESIGN_WRITE for the design the device already holds is not written
+ * again: step 2 answers it like a synchronous request, with "skipped" set.
+ * Each device keeps the UUID of its loaded design and the clients that use
+ * it in a `struct design_state` (see design_state.h).
+ *
  * ## FD passing via SCM_RIGHTS
  *
  * Several operations pass file descriptors out-of-band using the Unix
@@ -132,6 +137,7 @@
 #include "array.h"
 #include "auth.h"
 #include "clock.h"
+#include "design_state.h"
 #include "design_writer.h"
 #include "flash.h"
 #include "flash_worker.h"
@@ -319,11 +325,19 @@ static uint16_t client_handle_request_get_sensor_info(
     struct vrtd_resp_get_sensor_info *resp_body,
     uint16_t *resp_size
 );
+static uint16_t client_handle_request_get_design_info(
+    struct client *client,
+    const struct vrtd_req_get_design_info *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_get_design_info *resp_body,
+    uint16_t *resp_size
+);
 
 static uint16_t device_refresh_pf2_after_design_write(struct device *d);
+static void release_designs_for_conn_id(struct vrtd *state, uint64_t conn_id);
 static void cleanup_buffers_for_conn_id(struct vrtd *state, uint64_t conn_id);
-static void cleanup_client_buffers(struct client *client);
-static void drain_deferred_buffer_cleanups(struct vrtd *state);
+static void cleanup_client_device_state(struct client *client);
+static void drain_deferred_conn_cleanups(struct vrtd *state);
 
 /* ---- Helper: opcode / hotplug-op to human-readable string --------------- */
 
@@ -358,6 +372,7 @@ static const char *vrtd_opcode_to_string(uint16_t opcode)
     case VRTD_REQ_GET_SENSOR_INFO:   return "GET_SENSOR_INFO";
     case VRTD_REQ_BUFFER_OPEN_RAW:   return "BUFFER_OPEN_RAW";
     case VRTD_REQ_SET_SHELL_STATE:   return "SET_SHELL_STATE";
+    case VRTD_REQ_GET_DESIGN_INFO:   return "GET_DESIGN_INFO";
     default:                         return "UNKNOWN";
     }
 }
@@ -389,6 +404,18 @@ static struct device *device_ptr_array_find_by_bdf(
         struct device *d = devices->d[i];
         if (d != NULL && strcmp(d->pci_info.bdf, bdf) == 0) {
             return d;
+        }
+    }
+
+    return NULL;
+}
+
+static const struct client *client_find_by_conn_id(const struct vrtd *state, uint64_t conn_id)
+{
+    for (size_t i = 0; i < state->clients.len; i++) {
+        const struct client *c = state->clients.d[i];
+        if (c != NULL && c->conn_id == conn_id) {
+            return c;
         }
     }
 
@@ -523,15 +550,19 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
 
 /* ---- Client cleanup ----------------------------------------------------- */
 
-/* Buffer cleanup can be deferred while an async device op owns the device list. */
-static bool buffer_cleanup_is_deferred(struct vrtd *state, uint64_t conn_id)
+/*
+ * A disconnecting client leaves state on the devices: its buffers and its
+ * references on loaded designs.  Releasing it is deferred while an async
+ * device op owns the device list.
+ */
+static bool conn_cleanup_is_deferred(struct vrtd *state, uint64_t conn_id)
 {
     if (state == NULL || conn_id == 0) {
         return false;
     }
 
-    for (size_t i = 0; i < state->deferred_buffer_cleanup_conn_ids.len; i++) {
-        if (state->deferred_buffer_cleanup_conn_ids.d[i] == conn_id) {
+    for (size_t i = 0; i < state->deferred_cleanup_conn_ids.len; i++) {
+        if (state->deferred_cleanup_conn_ids.d[i] == conn_id) {
             return true;
         }
     }
@@ -539,16 +570,45 @@ static bool buffer_cleanup_is_deferred(struct vrtd *state, uint64_t conn_id)
     return false;
 }
 
-static int defer_buffer_cleanup(struct vrtd *state, uint64_t conn_id)
+static int defer_conn_cleanup(struct vrtd *state, uint64_t conn_id)
 {
     if (state == NULL || conn_id == 0) {
         return 0;
     }
-    if (buffer_cleanup_is_deferred(state, conn_id)) {
+    if (conn_cleanup_is_deferred(state, conn_id)) {
         return 0;
     }
 
-    return uint64_array_push(&state->deferred_buffer_cleanup_conn_ids, conn_id);
+    return uint64_array_push(&state->deferred_cleanup_conn_ids, conn_id);
+}
+
+/*
+ * Drop the references a connection holds on loaded designs.  A design whose
+ * last client is gone must not keep running at its own rate, so its clock is
+ * parked.  While other clients still hold the design it keeps running.
+ */
+static void release_designs_for_conn_id(struct vrtd *state, uint64_t conn_id)
+{
+    if (state == NULL || conn_id == 0) {
+        return;
+    }
+
+    for (size_t dev_idx = 0; dev_idx < state->devices.len; ++dev_idx) {
+        struct device *d = state->devices.d[dev_idx];
+        if (d == NULL || !design_state_release(&d->design, conn_id)) {
+            continue;
+        }
+
+        /* A write in flight has parked the clock itself; leave the card alone. */
+        if (d->design_writer != NULL && design_writer_is_busy(d->design_writer)) {
+            continue;
+        }
+        if (d->clock_driver != NULL) {
+            LOG(LOG_INFO, "Client conn_id=%llu was the last to use the design on %s; parking its clock",
+                (unsigned long long)conn_id, d->pci_info.bdf);
+            (void) clock_driver_park_user_region(d->clock_driver);
+        }
+    }
 }
 
 static void cleanup_buffers_for_conn_id(struct vrtd *state, uint64_t conn_id)
@@ -581,52 +641,44 @@ static void cleanup_buffers_for_conn_id(struct vrtd *state, uint64_t conn_id)
     }
 }
 
-static void cleanup_client_buffers(struct client *client)
+static void cleanup_client_device_state(struct client *client)
 {
     if (client == NULL || client->state == NULL || client->conn_id == 0) {
         return;
     }
 
-    LOG(LOG_DEBUG, "Cleaning up buffers for disconnecting client uid=%u conn_id=%llu",
+    LOG(LOG_DEBUG, "Cleaning up device state for disconnecting client uid=%u conn_id=%llu",
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
     if (client->state->async_device_op_in_progress) {
-        int ret = defer_buffer_cleanup(client->state, client->conn_id);
+        int ret = defer_conn_cleanup(client->state, client->conn_id);
         if (ret != 0) {
-            LOG(LOG_ERR, "Failed to defer buffer cleanup for conn_id=%llu while async device op is active",
+            LOG(LOG_ERR, "Failed to defer cleanup for conn_id=%llu while async device op is active",
                 (unsigned long long)client->conn_id);
         }
         return;
     }
 
+    release_designs_for_conn_id(client->state, client->conn_id);
     cleanup_buffers_for_conn_id(client->state, client->conn_id);
 }
 
-static void drain_deferred_buffer_cleanups(struct vrtd *state)
+static void drain_deferred_conn_cleanups(struct vrtd *state)
 {
     if (state == NULL) {
         return;
     }
 
-    for (size_t i = 0; i < state->deferred_buffer_cleanup_conn_ids.len; i++) {
-        uint64_t conn_id = state->deferred_buffer_cleanup_conn_ids.d[i];
-        LOG(LOG_DEBUG, "Draining deferred buffer cleanup for conn_id=%llu",
+    for (size_t i = 0; i < state->deferred_cleanup_conn_ids.len; i++) {
+        uint64_t conn_id = state->deferred_cleanup_conn_ids.d[i];
+        LOG(LOG_DEBUG, "Draining deferred cleanup for conn_id=%llu",
             (unsigned long long)conn_id);
+        release_designs_for_conn_id(state, conn_id);
         cleanup_buffers_for_conn_id(state, conn_id);
     }
 
-    state->deferred_buffer_cleanup_conn_ids.len = 0;
+    state->deferred_cleanup_conn_ids.len = 0;
 }
-
-/**
- * Tears down a client: releases buffers, closes fds, unregisters the event
- * source, and frees memory.
- *
- * Called when the client disconnects (EPOLLHUP / EPOLLRDHUP / EPOLLERR) or
- * when the daemon shuts down.  Safe to call with a NULL pointer.
- *
- * @param client  The client to destroy.
- */
 
 /*
  * The card's management controller must be up before a design write: a
@@ -685,36 +737,22 @@ static uint16_t design_write_prepare(struct device *d)
     return VRTD_RET_OK;
 }
 
-/* A design whose client is gone must not keep running at its own rate. */
-static void client_release_design(struct client *client)
-{
-    if (client->owned_design_bdf[0] == '\0' || client->state == NULL) {
-        return;
-    }
-    struct device *d = device_ptr_array_find_by_bdf(&client->state->devices, client->owned_design_bdf);
-    client->owned_design_bdf[0] = '\0';
-    if (d == NULL || !d->design_owner_valid || d->design_owner_conn != client->conn_id) {
-        return;
-    }
-    d->design_owner_valid = false;
-    if (d->design_writer != NULL && design_writer_is_busy(d->design_writer)) {
-        return;
-    }
-    if (d->clock_driver != NULL) {
-        LOG(LOG_INFO, "Client conn_id=%llu that loaded the design on %s is gone; parking its clock",
-            (unsigned long long)client->conn_id, d->pci_info.bdf);
-        (void) clock_driver_park_user_region(d->clock_driver);
-    }
-}
-
+/**
+ * Tears down a client: releases its buffers and design references, closes
+ * fds, unregisters the event source, and frees memory.
+ *
+ * Called when the client disconnects (EPOLLHUP / EPOLLRDHUP / EPOLLERR) or
+ * when the daemon shuts down.  Safe to call with a NULL pointer.
+ *
+ * @param client  The client to destroy.
+ */
 void cleanup_client(struct client *client)
 {
     if (client == NULL) {
         return;
     }
 
-    client_release_design(client);
-    cleanup_client_buffers(client);
+    cleanup_client_device_state(client);
 
     gid_t_array_free(&client->gids);
 
@@ -1453,6 +1491,16 @@ static int client_handle_request(struct client *client)
                 &size
             );
         break;
+    case VRTD_REQ_GET_DESIGN_INFO:
+        resp_header->ret =
+            client_handle_request_get_design_info(
+                client,
+                CLIENT_IN_BODY(*client, vrtd_req_get_design_info),
+                req_header->size,
+                CLIENT_OUT_BODY(*client, vrtd_resp_get_design_info),
+                &size
+            );
+        break;
 
     default:
         LOG(LOG_WARNING, "Unknown opcode=%u from uid=%u conn_id=%llu",
@@ -1550,24 +1598,42 @@ static int client_finalize_pending_design_write(struct client *client)
         return 0;
     }
 
-    /* Build the deferred response now that the async write has finished. */
+    /*
+     * Build the deferred response now that the async write has finished.  The
+     * request is still in the inbound buffer: the client cannot send another
+     * one while its write is pending.
+     */
+    struct vrtd_req_header *req_header = CLIENT_IN_HEADER(*client);
+    const struct vrtd_req_design_write *req_body = CLIENT_IN_BODY(*client, vrtd_req_design_write);
+
     uint16_t design_write_ret = VRTD_RET_OK;
     if (transfer_error == 0) {
         design_write_ret = device_refresh_pf2_after_design_write(d);
-        d->design_owner_valid = true;
-        d->design_owner_conn = client->conn_id;
-        strncpy(client->owned_design_bdf, d->pci_info.bdf, sizeof(client->owned_design_bdf) - 1);
-        LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
-            (unsigned int)client->uid, (unsigned long long)client->conn_id);
+        /*
+         * The loaded UUID was forgotten when the write was accepted.  It is
+         * recorded again only for a request that succeeded as a whole; if the
+         * PF2 refresh failed the design stays unknown and is written again.
+         */
+        if (design_write_ret == VRTD_RET_OK) {
+            design_state_write_completed(
+                &d->design, req_body->uuid,
+                (req_body->flags & VRTD_DESIGN_WRITE_MORE) != 0
+            );
+        }
+        char uuid_str[DESIGN_UUID_STR_LEN];
+        design_uuid_to_string(d->design.uuid, uuid_str);
+        LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu (loaded design %s)",
+            (unsigned int)client->uid, (unsigned long long)client->conn_id, uuid_str);
     } else {
         LOG(LOG_WARNING, "Design write failed (error=%d) for uid=%u conn_id=%llu",
             transfer_error, (unsigned int)client->uid, (unsigned long long)client->conn_id);
         design_write_ret = VRTD_RET_INTERNAL_ERROR;
-        d->needs_reset = true;
-        d->design_owner_valid = false;
+        if (d != NULL) {
+            d->needs_reset = true;
+            design_state_write_failed(&d->design);
+        }
     }
 
-    struct vrtd_req_header *req_header = CLIENT_IN_HEADER(*client);
     struct vrtd_resp_header *resp_header = CLIENT_OUT_HEADER(*client);
     struct vrtd_resp_design_write *resp_body = CLIENT_OUT_BODY(*client, vrtd_resp_design_write);
 
@@ -1575,7 +1641,7 @@ static int client_finalize_pending_design_write(struct client *client)
     resp_header->ret = design_write_ret;
 
     if (design_write_ret == VRTD_RET_OK) {
-        resp_body->zero = 0;
+        resp_body->skipped = 0;
         resp_header->size = sizeof(*resp_body);
     } else {
         resp_header->size = 0;
@@ -1720,7 +1786,7 @@ static int process_async_device_op_completion(struct vrtd *state)
     }
 
     state->async_device_op_in_progress = false;
-    drain_deferred_buffer_cleanups(state);
+    drain_deferred_conn_cleanups(state);
 
     for (size_t i = 0; i < state->clients.len; i++) {
         struct client *client = state->clients.d[i];
@@ -1858,15 +1924,24 @@ static uint16_t client_handle_request_get_num_devices(
  * pending_design_write is true the client is blocked from sending further
  * requests (EPOLLIN is disarmed).
  *
+ * The device remembers the UUID of the design it holds (design_state.h).  A
+ * request for that same design is answered at once with "skipped" set and
+ * nothing is written; the fd is closed by client_handle_request().  A request
+ * that would replace a design another client holds is refused.
+ *
  * Auth: auth_request_design_write (typically requires elevated privileges).
  * FD passing: inbound -- the client sends the bitstream fd via SCM_RIGHTS.
  *
  * Wire format:
- *   Request body:  vrtd_req_design_write { uint32_t dev_number }
- *   Response body: vrtd_resp_design_write { uint8_t zero } (deferred)
+ *   Request body:  vrtd_req_design_write { uint32_t dev_number,
+ *                                          uint8_t required_shell,
+ *                                          uint8_t flags, uint8_t uuid[16] }
+ *   Response body: vrtd_resp_design_write { uint8_t skipped } (deferred
+ *                                          unless skipped)
  *
- * @return VRTD_RET_OK if the write was successfully submitted,
- *         VRTD_RET_BUSY if the design writer is already active,
+ * @return VRTD_RET_OK if the write was successfully submitted or skipped,
+ *         VRTD_RET_BUSY if the design writer is already active or another
+ *         client holds the loaded design,
  *         or other VRTD_RET_* codes on error.
  */
 static uint16_t client_handle_request_design_write(
@@ -1877,8 +1952,6 @@ static uint16_t client_handle_request_design_write(
     uint16_t *resp_size
 )
 {
-    (void)resp_body;
-
     int ret = auth_request_design_write(client, req_body);
     if (ret == -1) {
         return VRTD_RET_INTERNAL_ERROR;
@@ -1917,6 +1990,12 @@ static uint16_t client_handle_request_design_write(
         return VRTD_RET_INVALID_ARGUMENT;
     }
 
+    const uint8_t known_flags = VRTD_DESIGN_WRITE_FORCE | VRTD_DESIGN_WRITE_MORE;
+    if ((req_body->flags & ~known_flags) != 0) {
+        LOG(LOG_WARNING, "design_write: invalid flags 0x%x", (unsigned int)req_body->flags);
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
     if (design_writer_is_busy(d->design_writer)) {
         LOG(LOG_NOTICE, "design_write: writer busy for device %u", (unsigned int)req_body->dev_number);
         return VRTD_RET_BUSY;
@@ -1930,7 +2009,61 @@ static uint16_t client_handle_request_design_write(
         return VRTD_RET_SHELL_LOCKED;
     }
 
-    if (shell_reset_required(d->current_shell, required_shell)) {
+    bool shell_switch = shell_reset_required(d->current_shell, required_shell);
+
+    /*
+     * Decide before anything touches the card: a design that is already
+     * loaded is not written again, and a design another client uses is not
+     * replaced -- neither by the write nor by the shell reset before it.
+     */
+    char uuid_str[DESIGN_UUID_STR_LEN];
+    design_uuid_to_string(req_body->uuid, uuid_str);
+
+    uint64_t holder_conn_id = 0;
+    enum design_request_action action = design_state_decide(
+        &d->design,
+        client->conn_id,
+        req_body->uuid,
+        (req_body->flags & VRTD_DESIGN_WRITE_FORCE) != 0,
+        !shell_switch && !d->needs_reset,
+        &holder_conn_id
+    );
+
+    if (action == DESIGN_REQUEST_SKIP) {
+        if (design_state_hold(&d->design, client->conn_id) != 0) {
+            LOG(LOG_ERR, "design_write: allocation failure for device %u", (unsigned int)req_body->dev_number);
+            return VRTD_RET_INTERNAL_ERROR;
+        }
+
+        LOG(LOG_INFO,
+            "design_write: design %s is already loaded on %s; nothing written "
+            "for uid=%u conn_id=%llu (%zu holder(s))",
+            uuid_str, d->pci_info.bdf,
+            (unsigned int)client->uid, (unsigned long long)client->conn_id,
+            d->design.holders.len);
+
+        resp_body->skipped = 1;
+        *resp_size = sizeof(*resp_body);
+        return VRTD_RET_OK;
+    }
+
+    if (action == DESIGN_REQUEST_BUSY) {
+        const struct client *holder = client_find_by_conn_id(client->state, holder_conn_id);
+        char loaded_str[DESIGN_UUID_STR_LEN];
+        design_uuid_to_string(d->design.uuid, loaded_str);
+
+        LOG(LOG_NOTICE,
+            "design_write: refusing to replace design %s on %s with %s for "
+            "uid=%u conn_id=%llu: in use by uid=%d conn_id=%llu (%zu holder(s))",
+            loaded_str, d->pci_info.bdf, uuid_str,
+            (unsigned int)client->uid, (unsigned long long)client->conn_id,
+            holder != NULL ? (int)holder->uid : -1,
+            (unsigned long long)holder_conn_id,
+            d->design.holders.len);
+        return VRTD_RET_BUSY;
+    }
+
+    if (shell_switch) {
         char target_bdf[VRTD_PCI_BDF_LEN] = {0};
         strncpy(target_bdf, d->pci_info.bdf, sizeof(target_bdf) - 1);
 
@@ -1955,6 +2088,17 @@ static uint16_t client_handle_request_design_write(
     uint16_t prepare_ret = design_write_prepare(d);
     if (prepare_ret != VRTD_RET_OK) {
         return prepare_ret;
+    }
+
+    /*
+     * The write is accepted.  Forget the loaded UUID before the transfer
+     * starts: until the write completes the device holds no design vrtd can
+     * name, and a failed or interrupted write leaves it that way.
+     */
+    if (design_state_write_begin(&d->design, client->conn_id) != 0) {
+        LOG(LOG_ERR, "design_write: cannot record the write on device %u: %m",
+            (unsigned int)req_body->dev_number);
+        return VRTD_RET_INTERNAL_ERROR;
     }
 
     /*
@@ -1983,8 +2127,8 @@ static uint16_t client_handle_request_design_write(
     client->pending_design_write = true;
     client->pending_design_write_device = d;
 
-    LOG(LOG_INFO, "Design write submitted dev=%u uid=%u conn_id=%llu",
-        (unsigned int)req_body->dev_number,
+    LOG(LOG_INFO, "Design write submitted dev=%u design=%s flags=0x%x uid=%u conn_id=%llu",
+        (unsigned int)req_body->dev_number, uuid_str, (unsigned int)req_body->flags,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
     *resp_size = 0;
@@ -2052,6 +2196,12 @@ static uint16_t client_handle_request_set_shell_state(
 
     d->current_shell = shell_type;
     d->jtag = req_body->jtag != 0;
+    /*
+     * The caller reports an image that was loaded outside vrtd (over JTAG, or
+     * booted before the daemon knew the shell): whatever design vrtd wrote
+     * before is not what the fabric holds now.
+     */
+    design_state_forget(&d->design);
 
     memset(resp_body, 0, sizeof(*resp_body));
     *resp_size = sizeof(*resp_body);
@@ -2146,6 +2296,14 @@ static uint16_t client_submit_cfgmem_program(
         (unsigned int)partition,
         (unsigned int)client->uid,
         (unsigned long long)client->conn_id);
+
+    /*
+     * The program ends in a reset into the new partition, after which the
+     * worker rebuilds the device object.  Forget the loaded design now, while
+     * this thread still owns the device, so that no outcome of the job can
+     * leave a UUID behind.
+     */
+    design_state_forget(&d->design);
 
     /*
      * Hand the PDI fd to the worker.  On success it owns the fd and will close
@@ -2326,6 +2484,13 @@ static uint16_t client_submit_device_reset(
         return VRTD_RET_INTERNAL_ERROR;
     }
 
+    /*
+     * The reset reloads the fabric from flash and the worker rebuilds the
+     * device object.  Forget the loaded design now, while this thread still
+     * owns the device, so that no outcome of the job can leave a UUID behind.
+     */
+    design_state_forget(&device->design);
+
     uint64_t job_id = 0;
     int submit_ret = flash_worker_submit_reset_async(
         client->state->flash_worker,
@@ -2455,6 +2620,14 @@ static uint16_t client_handle_request_device_hotplug_op(
     case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
     case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:
     case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG: {
+        /*
+         * A bus reset or a function going away and coming back leaves the
+         * fabric in a state vrtd did not write.  Not every path below drops
+         * the device object (toggle_sbr and a single-function hotplug keep
+         * it), so forget the loaded design here, before the first step.
+         */
+        design_state_forget(&d->design);
+
         if (req_body->function == VRTD_DEVICE_HOTPLUG_FUNCTION_ALL) {
             if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR) {
                 LOG(LOG_ERR, "hotplug_op: toggle_sbr requires a specific function number");
@@ -2893,7 +3066,7 @@ static uint16_t client_handle_request_qdma_qpair_get_fd(
  *
  * The buffer is tracked in the device's buffer list with the client's conn_id
  * so that it can be automatically freed if the client disconnects without
- * calling BUFFER_CLOSE (see cleanup_client_buffers).
+ * calling BUFFER_CLOSE (see cleanup_client_device_state).
  *
  * Auth: auth_request_buffer_open.
  * FD passing: outbound -- the buffer qpair fd is sent via SCM_RIGHTS.
@@ -3498,6 +3671,70 @@ static uint16_t client_handle_request_get_device_info(
     *resp_size = sizeof(*resp_body);
 
     LOG(LOG_DEBUG, "get_device_info: dev=%u uid=%u conn_id=%llu",
+        (unsigned int)req_body->dev_number,
+        (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+    return VRTD_RET_OK;
+}
+
+/* ---- GET_DESIGN_INFO ---------------------------------------------------- */
+
+/**
+ * Handles VRTD_REQ_GET_DESIGN_INFO -- reports the design loaded on a device.
+ *
+ * Returns the UUID of the design vrtd wrote last (all-zero if it does not
+ * know what the device holds) and the number of client connections that hold
+ * a reference on it.
+ *
+ * Auth: auth_request_get_design_info.
+ * FD passing: none.
+ *
+ * Wire format:
+ *   Request body:  vrtd_req_get_design_info { uint32_t dev_number }
+ *   Response body: vrtd_resp_get_design_info { vrtd_design_info info }
+ *
+ * @return VRTD_RET_OK on success, VRTD_RET_NOEXIST if dev_number is invalid.
+ */
+static uint16_t client_handle_request_get_design_info(
+    struct client *client,
+    const struct vrtd_req_get_design_info *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_get_design_info *resp_body,
+    uint16_t *resp_size
+)
+{
+    int ret = auth_request_get_design_info(client, req_body);
+    if (ret == -1) {
+        return VRTD_RET_INTERNAL_ERROR;
+    } else if (ret == 0) {
+        return VRTD_RET_AUTH_ERROR;
+    }
+
+    *resp_size = 0;
+
+    if (req_size < sizeof(*req_body)) {
+        LOG(LOG_WARNING, "get_design_info: malformed request");
+        return VRTD_RET_BAD_REQUEST;
+    }
+
+    if (req_body->dev_number >= client->state->devices.len) {
+        LOG(LOG_NOTICE, "get_design_info: device %u does not exist", (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    struct device *d = client->state->devices.d[req_body->dev_number];
+    if (d == NULL) {
+        LOG(LOG_NOTICE, "get_design_info: device %u is null", (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    memset(resp_body, 0, sizeof(*resp_body));
+    memcpy(resp_body->info.uuid, d->design.uuid, sizeof(resp_body->info.uuid));
+    resp_body->info.num_holders = (uint32_t)d->design.holders.len;
+
+    *resp_size = sizeof(*resp_body);
+
+    LOG(LOG_DEBUG, "get_design_info: dev=%u uid=%u conn_id=%llu",
         (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
