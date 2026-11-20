@@ -74,6 +74,20 @@ class SpMapping:
     inst: str
     port: str
     target: MemoryTarget
+    # ':DIRECT' (HBM targets only): the kernel presents this port at the HBM
+    # port's own width (256 bits) and clock (the static region clock, which
+    # a clk= binding gives the kernel): wired straight to HBM_AXI_<k>, no
+    # SmartConnect.
+    direct: bool = False
+
+
+@dataclass(frozen=True)
+class ClockBind:
+    """clk=<inst>.<port>:STATIC -- a kernel clock input driven by the shell's
+    static region clock (the direct HBM ports' clock) instead of user_clk."""
+    inst: str
+    port: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -88,6 +102,7 @@ class ConnectivityConfig:
     streams: List[StreamConnect] = field(default_factory=list)
     sps: List[SpMapping] = field(default_factory=list)
     clocks: List[ClockSpec] = field(default_factory=list)
+    clock_binds: List[ClockBind] = field(default_factory=list)
     net: NetworkSpec = field(
         default_factory=lambda: NetworkSpec(enabled_eth={}))
     user_region: UserRegionSpec = field(

@@ -37,9 +37,14 @@ def build_kernel_add_context(instances: Dict[str, KernelInstance]) -> dict:
     clocks = []
     resets = []
     for name, inst in ordered.items():
+        binds = inst.params.get("clk_bind", {})
         for p in inst.kernel.ports_of_type(BusType.CLOCK):
             phys = inst.kernel.bus_physical_port(p.name) or p.name
-            clocks.append({"src_pin": f"{inst.name}/{phys}"})
+            # A clk= binding (the static region clock of the direct HBM
+            # ports) instead of user_clk.
+            dst = "[get_bd_ports static_region_clk]" if binds.get(p.name) == "static_region_clk" \
+                else "[get_bd_pins user_clk]"
+            clocks.append({"src_pin": f"{inst.name}/{phys}", "dst": dst})
 
         for p in inst.kernel.ports_of_type(BusType.RESET):
             phys = inst.kernel.bus_physical_port(p.name) or p.name
