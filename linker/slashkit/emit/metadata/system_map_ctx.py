@@ -26,6 +26,7 @@ import re
 
 from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
+from slashkit.core.mem_pools import MEM_POOLS
 from slashkit.core.regs import AddressBlock
 from slashkit.emit.hls_meta import load_hls_metadata, parse_hls_args
 
@@ -378,7 +379,10 @@ def _assign_mem_indices(
     instances: Dict[str, KernelInstance],
     *,
     num_mem_ports: int = 8,
+    domain: str = "MEM",
 ) -> Dict[Tuple[str, str], int]:
+    """Round-robin index of every master bound to `domain` (MEM or a per-SLR pool), in the
+    same order as emit/hw/user_region/mem_ctx.py assigns them."""
     buckets: Dict[int, List[Tuple[str, str]]] = {
         i: [] for i in range(num_mem_ports)}
     rr = 0
@@ -386,14 +390,14 @@ def _assign_mem_indices(
     for inst in instances.values():
         mem_sp = inst.params.get("mem_sp", {}) or {}
         for k_port, tgt in mem_sp.items():
-            if tgt.get("domain") != "MEM":
+            if tgt.get("domain") != domain:
                 continue
             if inst.kernel.port(k_port).ptype != BusType.AXI4FULL:
                 continue
             idx = _coerce_optional_int(tgt.get("index"))
             if idx is not None and not (0 <= idx < num_mem_ports):
                 raise ValueError(
-                    f"MEM index {idx} out of range (0..{num_mem_ports - 1}) for {inst.name}/{k_port}"
+                    f"{domain} index {idx} out of range (0..{num_mem_ports - 1}) for {inst.name}/{k_port}"
                 )
             if idx is None:
                 idx = rr % num_mem_ports
@@ -411,6 +415,8 @@ def _format_target(domain: str, index: Optional[int]) -> str:
     dom = domain.upper()
     if index is None or index == "":
         return dom
+    if dom in MEM_POOLS and dom != "MEM":
+        return f"{dom}_{index}"  # MEM_SLR0_3: the runtime reads any MEM* target as HBM_VNOC
     return f"{dom}{index}"
 
 
@@ -425,12 +431,18 @@ def build_system_map_context(
     num_mem_ports: int = 8,
     num_virt: int = 4,
     network: Optional[object] = None,
+    pool_ports: Optional[Dict[str, int]] = None,
 ) -> dict:
     axilite_by_inst: Dict[str, List[dict]] = {}
     for entry in axilite_addr:
         axilite_by_inst.setdefault(entry["inst"], []).append(entry)
 
     mem_indices = _assign_mem_indices(instances, num_mem_ports=num_mem_ports)
+    pool_indices = {
+        name: _assign_mem_indices(
+            instances, num_mem_ports=(pool_ports or {}).get(name, pool.num_ports), domain=name)
+        for name, pool in MEM_POOLS.items() if name != "MEM"
+    }
 
     hls_by_type = kernel_hls_by_type or {}
     hls_cache: Dict[str, Optional[dict]] = {}
@@ -493,6 +505,8 @@ def build_system_map_context(
             idx = _coerce_optional_int(tgt.get("index"))
             if domain == "MEM" and idx is None:
                 idx = mem_indices.get((inst.name, port.name))
+            elif domain in pool_indices and idx is None:
+                idx = pool_indices[domain].get((inst.name, port.name))
             connections.append(
                 {
                     "port": port.name,

@@ -120,6 +120,10 @@ update_compile_order -fileset sources_1
   set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports QDMA_SLAVE_BRIDGE_0]
   set_property APERTURES {{0x202_0000_0000 128M}} [get_bd_intf_ports S_AXILITE_INI]
   {% endraw %}
+{% for n in mem_pool_nocs|default([]) %}
+  # same window as the shell sets on this port (any_slr_hbm.tcl)
+  set_property APERTURES {{ "{" ~ n.apertures ~ "}" }} [get_bd_intf_ports {{ n.port }}]
+{% endfor %}
  # Create instance: ddr_noc_0, and set properties
   set ddr_noc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc ddr_noc_0 ]
   set_property -dict [list \
@@ -577,6 +581,29 @@ update_compile_order -fileset sources_1
  ] [get_bd_pins /hbm_vnoc_07/aclk0]
 
   # Create instance: xlconstant_0, and set properties
+{% for n in mem_pool_nocs|default([]) %}
+  # Per-SLR HBM ingress {{ n.name }} -> {{ n.port }} (any-SLR HBM shell; site locked by the shell)
+  set {{ n.name }} [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc {{ n.name }} ]
+  set_property -dict [list \
+    CONFIG.NSI_NAMES {} \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+    CONFIG.NUM_NSI {0} \
+  ] ${{ n.name }}
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {{ "{" ~ n.strategy ~ "}" }} \
+ ] [get_bd_intf_pins /{{ n.name }}/M00_INI]
+  set_property -dict [ list \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {{ "{" ~ n.bw ~ "}" }} write_bw {{ "{" ~ n.bw ~ "}" }}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /{{ n.name }}/S00_AXI]
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /{{ n.name }}/aclk0]
+  connect_bd_intf_net [get_bd_intf_ports {{ n.port }}] [get_bd_intf_pins {{ n.name }}/M00_INI]
+
+{% endfor %}
   set xlconstant_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_0 ]
 
   # Create instance: axi_noc_0, and set properties
@@ -704,6 +731,9 @@ update_compile_order -fileset sources_1
   [get_bd_pins qdma_slave_bridge_noc/aclk0] \
   [get_bd_pins axi_noc_0/aclk0] \
   [get_bd_pins c_shift_ram_0/CLK]
+{% for n in mem_pool_nocs|default([]) %}
+  connect_bd_net [get_bd_pins user_clk] [get_bd_pins {{ n.name }}/aclk0]
+{% endfor %}
 
 # === Instantiate kernel IPs ===
 {% for name, inst in instances.items() %}

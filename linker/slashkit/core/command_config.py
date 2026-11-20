@@ -161,7 +161,11 @@ Connectivity Configuration Format:
 
     sp=<inst>.<port>:<memory_target>
       Example: sp=vadd_0.m_axi_gmem0:HBM0
-      Maps AXI4-Full memory ports to memory banks (HBM0-31, DDR0-3, MEM, HOST).
+      Maps AXI4-Full memory ports to memory banks (HBM0-63, DDR0-3, MEM, HOST).
+      MEM sees all 32 GB of HBM through NoC ingress units in SLR2. On an any-SLR
+      HBM compute shell, MEM_SLR0 and MEM_SLR1 see the same window through
+      ingress units in SLR0 and SLR1 (MEM_SLR2 = MEM): bind a master to the pool
+      of the SLR its logic sits in, so HBM traffic crosses dies on the NoC.
 
   [clock]  - Specify per-kernel clock frequencies (can be repeated)
     krnl=<instance_name>
@@ -506,11 +510,19 @@ class InstallerConfiguration(CommandConfiguration):
             default="service",
             help="Hardware shell variant to build and install (compute or service). Default: service",
         )
+        ap.add_argument(
+            "--no-any-slr-hbm",
+            action="store_true",
+            help="Compute shell only: build without the per-SLR HBM ingress ports (MEM_SLR0/MEM_SLR1) "
+            "and keep the shipped direct-HBM bookings (the classic compute shell).",
+        )
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)
 
         self._ignore_timing_failure: bool = args.ignore_timing_failure
+        if getattr(args, "no_any_slr_hbm", False):
+            os.environ["SLASH_ANY_SLR_HBM"] = "0"
 
         self._build_dir: Path = args.build_dir.expanduser().resolve()
         if self._build_dir.is_dir():

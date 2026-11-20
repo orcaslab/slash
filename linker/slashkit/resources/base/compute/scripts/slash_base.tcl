@@ -3620,6 +3620,11 @@ proc create_root_design { parentCell } {
   # Restore current instance
   current_bd_instance $oldCurInst
 
+  # Per-SLR HBM ingress (any_slr_hbm.tcl): NMU512 ports in SLR0/SLR1 for the RP.
+  variable script_folder
+  source [file join $script_folder any_slr_hbm.tcl]
+  asl_rp
+
   validate_bd_design
   save_bd_design
 }

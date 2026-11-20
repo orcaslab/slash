@@ -46,9 +46,11 @@ def build_mem_smartconnect_context(
     max_si: int = 16,
     base_name: str = "sc_mem",
     noc_pin_fmt: str = "/hbm_vnoc_0{index}/S00_AXI",
+    domain: str = "MEM",
 ) -> dict:
     """
-    Map all AXI4FULL masters targeting MEM to 8 VNOC slaves using round-robin,
+    Map all AXI4FULL masters targeting `domain` (MEM or a per-SLR pool such as MEM_SLR0, see
+    core/mem_pools.py) to its NoC slaves using round-robin,
     unless a MEM index is explicitly specified in the config (sp=...:MEM<i>).
     If a VNOC bucket has >1 masters, build a SmartConnect reduction tree with
     <= max_si SIs per node (NUM_CLKS=1, NUM_MI=1).
@@ -68,7 +70,7 @@ def build_mem_smartconnect_context(
     for inst in instances.values():
         mem_sp = inst.params.get("mem_sp", {})
         for k_port, tgt in mem_sp.items():
-            if tgt.get("domain") == "MEM":
+            if tgt.get("domain") == domain:
                 # Only AXI4FULL should be in mem_sp for memory mapping
                 if inst.kernel.port(k_port).ptype == BusType.AXI4FULL:
                     src_pin = f"{inst.name}/{k_port}"
@@ -76,7 +78,7 @@ def build_mem_smartconnect_context(
                     idx = _coerce_optional_int(tgt.get("index"))
                     if idx is not None and not (0 <= idx < num_mem_ports):
                         raise ValueError(
-                            f"MEM index {idx} out of range (0..{num_mem_ports - 1}) for {src_pin}"
+                            f"{domain} index {idx} out of range (0..{num_mem_ports - 1}) for {src_pin}"
                         )
                     mem_sources.append((src_pin, idx))
 

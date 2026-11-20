@@ -27,6 +27,7 @@ import re
 from slashkit.core.kernel import Kernel, KernelInstance
 from slashkit.core.connectivity import *
 from slashkit.core.port import BusType
+from slashkit.core.mem_pools import MEM_POOL_ALIASES, canonical_pool
 
 
 # -----------------------------
@@ -39,11 +40,29 @@ _RE_ETH_KEY = re.compile(r"^eth_(\d+)$", re.IGNORECASE)
 _RE_DEBUG_NET = re.compile(r"^\s*([^.:\s]+)\.([^.:\s]+)\s*$")
 
 
+# Per-SLR whole-HBM pools (core/mem_pools.py): MEM_SLR0, MEM_SLR1, MEM_SLR2 (= MEM).
+_RE_POOL_TARGET = re.compile(r"^\s*(MEM_SLR\d+)(?:_(\d+))?\s*$", re.IGNORECASE)
+
+
 def _parse_target(s: str) -> MemoryTarget:
+    mp = _RE_POOL_TARGET.match(s)
+    if mp:
+        name = mp.group(1).upper()
+        pool = canonical_pool(name)
+        if pool is None:
+            raise ValueError(
+                f"Unsupported memory target '{s}'. Per-SLR pools are MEM_SLR0, MEM_SLR1 and "
+                f"MEM_SLR2 ({', '.join(f'{a}={b}' for a, b in MEM_POOL_ALIASES.items())})."
+            )
+        if mp.group(2) is not None:
+            if pool == "MEM":
+                raise ValueError(f"'{s}': MEM_SLR2 is MEM, which takes no unit index.")
+            return MemoryTarget(domain=pool, index=int(mp.group(2)))
+        return MemoryTarget(domain=pool, index="")
     m = _RE_TARGET.match(s)
     if not m:
         raise ValueError(
-            f"Invalid memory target '{s}'. Expected e.g. HBM0, DDR3, MEM, HOST."
+            f"Invalid memory target '{s}'. Expected e.g. HBM0, DDR3, MEM, MEM_SLR0, HOST."
         )
     domain, idx_str = m.group(1).upper(), m.group(2)
     if domain not in {"HBM", "DDR", "MEM", "VIRT", "HOST"}:

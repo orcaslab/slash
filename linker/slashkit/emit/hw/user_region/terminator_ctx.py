@@ -25,7 +25,7 @@ from slashkit.core.port import BusType
 from slashkit.core.bd_ports import BlockDesignPorts, BdPort
 
 _RX_SKIP_TOP = re.compile(
-    r"^(M\d{2}_INI|HBM_VNOC_INI_\d{2}|HBM_AXI_\d{2})$", re.IGNORECASE
+    r"^(M\d{2}_INI|HBM_VNOC_INI_\d{2}|HBM_S\d_INI_\d{2}|HBM_AXI_\d{2})$", re.IGNORECASE
 )
 
 
