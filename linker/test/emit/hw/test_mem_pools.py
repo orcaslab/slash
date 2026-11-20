@@ -20,6 +20,7 @@
 
 """Per-SLR whole-HBM pools: sp=...:MEM_SLR0 / MEM_SLR1 / MEM_SLR2 (= MEM)."""
 
+import os
 import re
 from pathlib import Path
 
@@ -192,11 +193,15 @@ def test_pool_shape_read_from_shell_bd(tmp_path):
 
 
 def test_pool_real_shell_bd():
-    """asl9's slash_base.bd, if present: 4 units x 8 PCs, 1500 MB/s, driver."""
+    """asl9's slash_base.bd, if SLASH_ASL9_BD names it: 4 units x 8 PCs, 1500 MB/s, driver.
+
+    SLASH_ASL9_BD is the shell build's
+    slash.srcs/sources_1/bd/slash_base/slash_base.bd (install.prj of the asl9 build).
+    """
     from slashkit.core.mem_pools import shell_pool
-    bd = Path("/home/blaise/dev/fame5_work/slash_shell_1113/install.prj.asl9/slash.srcs/sources_1/bd/slash_base/slash_base.bd")
-    if not bd.is_file():
-        pytest.skip("no asl9 build")
+    bd = Path(os.environ.get("SLASH_ASL9_BD", ""))
+    if not os.environ.get("SLASH_ASL9_BD") or not bd.is_file():
+        pytest.skip("no asl9 build (set SLASH_ASL9_BD)")
     p = shell_pool(bd, "MEM_SLR0")
     assert (p.num_ports, p.pcs_per_port, p.bw_mbps, p.ini_strategy) == (4, 8, 1500, "driver")
     assert p.port_pcs(1) == [1, 5, 9, 13, 17, 21, 25, 29]
