@@ -4,6 +4,53 @@ SLASH is an open-source platform for AMD Alveo V80 FPGA boards. It provides a
 complete runtime and development ecosystem for executing FPGA kernels, managing
 devices, and transferring data between host and device memory.
 
+## About this fork (orcaslab/slash)
+
+This repository is the [orcaslab](https://github.com/orcaslab) fork of
+[Xilinx/SLASH](https://github.com/Xilinx/SLASH). Its `main` branch keeps the
+full upstream history and adds the platform work that the
+[Vortex GPGPU](https://github.com/vortexgpgpu/vortex) and
+[FoldSim](https://github.com/orcaslab/foldsim) flows run on the V80:
+
+- **vrtd safety.** The daemon parks the user clock before a design write and
+  replaces a design only from a safe state (AMC health check). It never
+  programs a clock above the requested rate, and it reads back the clock
+  wizard's dividers correctly.
+- **Design UUIDs (XRT-style reuse).** slashkit stamps a UUID into every
+  hardware vbin. vrtd does not write a design the card already holds and
+  tracks the clients that hold it. A forget request (`v80-smi forget-design`)
+  clears the record. `VRT_FORCE_PROGRAM=1` forces a write.
+- **Compute shell with per-SLR HBM.** NoC ingress for HBM in SLR0 and SLR1
+  (link targets `MEM_SLR0` / `MEM_SLR1`), one 32 GB aperture, and a booking
+  read from the installed shell. The vNoC memory ingress is pinned to SLR2.
+  This is the static shell flashed on our V80s.
+- **slashkit.**
+  - Direct HBM binding: `sp=<port>:HBM<k>:DIRECT` and `clk=<port>:STATIC`,
+    with no SmartConnect.
+  - The kernel clock is constrained and recorded at the timed rate.
+  - Timing and area reports with an SLR breakdown.
+  - The Vivado version is taken from the installed tool.
+- **Host side.** DMA-coherent host buffers that a kernel's AXI master can
+  address. Kernel-compatibility shims for current Linux kernels (timers, QDMA
+  logging). Packaging fixes for DKMS and Secure Boot.
+
+The build steps are the same as upstream's, under Quick Start below. On a host
+without root, install into a user prefix instead of `/usr`: pass
+`-DCMAKE_INSTALL_PREFIX=<prefix>` to every component and skip `sudo`. For the
+host-side unit tests, configure `vrt/vrtd` with `-DVRTD_BUILD_TESTS=ON` and
+`smi` with `-DVRT_BUILD_TESTS=ON`, then run `ctest`. For slashkit, run
+`python3 -m pytest` in `linker/`.
+
+Related orcaslab repositories:
+
+| Repository | What it is |
+|------------|------------|
+| [orcaslab/circt](https://github.com/orcaslab/circt) | CIRCT fork: Synth/LUT-mapper, LongestPath and circt-verilog work that FoldSim and Beacon build on |
+| [orcaslab/foldsim](https://github.com/orcaslab/foldsim) | FoldSim: folds RTL into FPGA-hosted simulators; links its images with this slashkit |
+| [orcaslab/beacon](https://github.com/orcaslab/beacon) | Beacon: pre-synthesis logic-depth and timing screen |
+| [orcaslab/firesim](https://github.com/orcaslab/firesim) | FireSim fork with the V80 (aved) platform, built on this stack |
+| [vortexgpgpu/vortex](https://github.com/vortexgpgpu/vortex) | The Vortex GPGPU, whose V80 images run on this stack |
+
 Key components:
 
 - **VRT** (V80 RunTime) — C++17 API for kernel execution, buffer management, and device control
